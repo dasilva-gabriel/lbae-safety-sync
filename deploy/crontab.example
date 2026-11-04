@@ -1,0 +1,10 @@
+# crontab -e  (avec l'utilisateur qui possède le dossier de l'application)
+# Le cron d'Ubuntu utilise le fuseau du serveur : vérifier qu'il est en Europe/Paris
+# (timedatectl ; sinon sudo timedatectl set-timezone Europe/Paris).
+APP=/applis/SAFETY_SYNC/lbae-safety-sync
+
+# Étapes 1 à 3 chaque nuit à 6h00
+0 6 * * * cd $APP && mkdir -p logs && .venv/bin/safety-sync sync >> logs/cron.log 2>&1
+
+# Rapport hebdomadaire le lundi à 9h00 (semaine précédente)
+0 9 * * 1 cd $APP && mkdir -p logs && .venv/bin/safety-sync rapport >> logs/cron.log 2>&1
