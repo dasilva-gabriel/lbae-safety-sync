@@ -15,7 +15,7 @@ from safetysync.mitti import (
     task_site,
     task_status_id,
 )
-from safetysync.parcs import Referentiel, load_referentiel
+from safetysync.parcs import Referentiel, referentiel_from_sites
 from safetysync.report.analysis import (
     NOT_CONFIGURED,
     ActionStats,
@@ -74,14 +74,13 @@ def collect_weekly(
     start = datetime.combine(monday, time.min, tz)
     end = start + timedelta(days=7)
     warnings: list[str] = []
-    referentiel = load_referentiel(settings.parcs_file)
-    if not referentiel.regions:
-        warnings.append(
-            f"Référentiel des parcs absent ({settings.parcs_file}) : parcs regroupés "
-            "dans « Autres parcs »."
-        )
-
-    site_names = {s["id"]: (s.get("name") or "").strip().upper() for s in mitti.feed_sites()}
+    referentiel = referentiel_from_sites(
+        list(mitti.feed_sites()),
+        region_level=settings.region_level,
+        excluded=settings.excluded_sites,
+    )
+    site_names = referentiel.site_names
+    excluded = {e.strip().upper() for e in settings.excluded_sites}
 
     def to_inspection(raw: dict) -> Inspection | None:
         site = site_names.get(raw.get("site_id") or "", "")
@@ -173,7 +172,7 @@ def collect_weekly(
                         s.plus_ancienne = reported
 
     # --- Assemblage
-    seen = {i.site for i in journaliers} | {i.site for i in hebdos} | set(stats)
+    seen = ({i.site for i in journaliers} | {i.site for i in hebdos} | set(stats)) - excluded
     referentiel = referentiel.with_unknown(seen)
     parcs = referentiel.parcs
     open_days = opening_days(days, journaliers, [p for p in parcs], settings.opening_ratio)

@@ -37,7 +37,6 @@ def report_settings(tmp_path) -> ReportSettings:
     return ReportSettings(
         journalier_template_ids=["tpl_j"],
         hebdo_template_ids=["tpl_h"],
-        parcs_file=tmp_path / "parcs.toml",
         output_dir=tmp_path,
         _env_file=None,
     )

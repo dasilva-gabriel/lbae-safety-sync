@@ -111,8 +111,10 @@ class ReportSettings(BaseSettings):
     # IDs des trames Mitti (voir `safety-sync diagnostic`).
     journalier_template_ids: list[str] = []
     hebdo_template_ids: list[str] = []
-    # Régions, responsables et parcs (TOML, voir parcs.example.toml).
-    parcs_file: Path = Path("parcs.toml")
+    # Régions lues dans Mitti : niveau de l'arbre des sites qui définit une région.
+    region_level: str = "region"
+    # Sites Mitti à ne pas faire apparaître dans le rapport (ex. sites de test, parcs fermés).
+    excluded_sites: list[str] = []
     # Jour considéré comme ouvert si au moins ce ratio de parcs a fait son journalier.
     opening_ratio: float = Field(default=0.2, ge=0, le=1)
     # Durée minimale crédible d'un contrôle journalier (secondes).

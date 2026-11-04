@@ -127,16 +127,17 @@ def test_priorite():
 
 
 def test_collecte_et_rendu(mitti, ss, router, report_settings, sync_settings):
-    report_settings.parcs_file.write_text(
-        '[[regions]]\nnom = "Carine (Nord)"\nresponsable = "Carine"\nparcs = ["GP-A", "GP-B"]\n',
-        encoding="utf-8",
-    )
-    router.get(f"{MITTI}/feed/sites").respond(
+    report_settings.excluded_sites = ["GP-TEST"]
+    router.get(f"{MITTI}/feed/sites", params={"show_only_leaf_nodes": "false"}).respond(
         json={
             "data": [
-                {"id": "s1", "name": "GP-A"},
-                {"id": "s2", "name": "GP-B"},
-                {"id": "s3", "name": "GP-C"},
+                {"id": "r1", "name": "Carine (Nord)", "meta_label": "region"},
+                {"id": "a1", "name": "Hauts-de-France", "meta_label": "area", "parent_id": "r1"},
+                {"id": "s1", "name": "GP-A", "meta_label": "location", "parent_id": "a1"},
+                {"id": "s2", "name": "GP-B", "meta_label": "location", "parent_id": "r1"},
+                {"id": "s3", "name": "GP-C", "meta_label": "location"},
+                {"id": "s4", "name": "GP-TEST", "meta_label": "location", "parent_id": "r1"},
+                {"id": "s5", "name": "GP-OLD", "meta_label": "location", "deleted": True},
             ]
         }
     )
@@ -211,8 +212,9 @@ def test_collecte_et_rendu(mitti, ss, router, report_settings, sync_settings):
 
     assert [r.nom for r in rep.referentiel.regions] == [
         "Carine (Nord)",
-        "Autres parcs (non référencés)",
+        "Sans région",
     ]
+    assert rep.referentiel.regions[0].parcs == ["GP-A", "GP-B"]
     assert rep.referentiel.regions[1].parcs == ["GP-C"]
     # Lundi : 2/3 parcs ; mardi : 1/3 → ouverts ; mercredi… : fermés
     assert rep.open_days == {date(2026, 10, 19), date(2026, 10, 20)}
@@ -229,7 +231,7 @@ def test_collecte_et_rendu(mitti, ss, router, report_settings, sync_settings):
 
     html = render(rep)
     assert subject(rep) == "Rapport maintenance du réseau du 19/10/2026 au 25/10/2026"
-    assert "Région : Carine (Nord) — Carine" in html
+    assert "Région : Carine (Nord)" in html
     assert "Durée non cohérente (120 sec)" in html
     assert "Flippers" in html and "Parcs prioritaires" in html
 
@@ -263,3 +265,24 @@ def test_trames_non_configurees(mitti, ss, router, report_settings, sync_setting
     assert rep.hebdo["GP-A"].text == "Non configuré"
     assert {c.color for c in rep.day_cells["GP-A"]} == {GRIS}
     assert "hebdo manquant" not in rep.priorities[0].reasons
+
+
+def test_regions_depuis_l_arbre_mitti():
+    from safetysync.parcs import referentiel_from_sites
+
+    nodes = [
+        {"id": "r1", "name": "Ouest", "meta_label": "region"},
+        {"id": "r2", "name": "Est", "meta_label": "region"},
+        {
+            "id": "l1",
+            "name": "gp-lma",
+            "meta_label": "location",
+            "parent_id": "r1",
+            "site_uuid": "u1",
+        },
+        {"id": "l2", "name": "GP-BOR", "meta_label": "location", "parent_id": "r2"},
+    ]
+    ref = referentiel_from_sites(nodes)
+    assert [(r.nom, r.parcs) for r in ref.regions] == [("Est", ["GP-BOR"]), ("Ouest", ["GP-LMA"])]
+    assert ref.site_names == {"l1": "GP-LMA", "u1": "GP-LMA", "l2": "GP-BOR"}
+    assert ref.region_of("GP-LMA").nom == "Ouest"

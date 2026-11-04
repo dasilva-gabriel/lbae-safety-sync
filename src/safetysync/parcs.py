@@ -1,23 +1,29 @@
-"""Référentiel des régions et parcs (fichier TOML, voir parcs.example.toml)."""
+"""Référentiel des régions et parcs, construit depuis l'arbre des sites Mitti.
+
+Le data feed /feed/sites (avec `show_only_leaf_nodes=false`) renvoie tous les niveaux
+(location, area, region…) avec `parent_id` et `meta_label`. Un parc est un site
+« feuille » ; sa région est le premier ancêtre dont le niveau vaut `region_level`
+(par défaut « region »), à défaut l'ancêtre direct.
+"""
 
 from __future__ import annotations
 
-import tomllib
-from dataclasses import dataclass, field
-from pathlib import Path
+from dataclasses import dataclass
+
+NO_REGION = "Sans région"
+UNKNOWN_REGION = "Autres parcs (hors arbre Mitti)"
 
 
 @dataclass
 class Region:
     nom: str
     parcs: list[str]
-    responsable: str = ""
-    emails: list[str] = field(default_factory=list)
 
 
 @dataclass
 class Referentiel:
     regions: list[Region]
+    site_names: dict[str, str]  # id du site Mitti -> code parc (ex. GP-LMA)
 
     @property
     def parcs(self) -> list[str]:
@@ -30,28 +36,57 @@ class Referentiel:
         return None
 
     def with_unknown(self, seen: set[str]) -> Referentiel:
-        """Ajoute une région « Autres parcs » pour les sites vus mais non référencés."""
+        """Ajoute les parcs vus (actions, feuilles…) mais absents de l'arbre Mitti."""
         known = set(self.parcs)
         others = sorted(s for s in seen if s and s not in known)
         if not others:
             return self
-        return Referentiel(
-            self.regions + [Region(nom="Autres parcs (non référencés)", parcs=others)]
-        )
+        return Referentiel(self.regions + [Region(UNKNOWN_REGION, others)], self.site_names)
 
 
-def load_referentiel(path: Path) -> Referentiel:
-    if not path.exists():
-        return Referentiel(regions=[])
-    data = tomllib.loads(path.read_text(encoding="utf-8"))
-    regions = []
-    for raw in data.get("regions") or []:
-        regions.append(
-            Region(
-                nom=raw["nom"],
-                parcs=[p.strip().upper() for p in raw.get("parcs") or []],
-                responsable=raw.get("responsable", ""),
-                emails=list(raw.get("emails") or []),
-            )
-        )
-    return Referentiel(regions=regions)
+def referentiel_from_sites(
+    nodes: list[dict], *, region_level: str = "region", excluded: list[str] | None = None
+) -> Referentiel:
+    excluded_set = {e.strip().upper() for e in excluded or []}
+    alive = [n for n in nodes if not n.get("deleted")]
+    by_id = {n["id"]: n for n in alive if n.get("id")}
+    parents = {n.get("parent_id") for n in alive if n.get("parent_id")}
+    level = region_level.strip().lower()
+
+    def is_leaf(node: dict) -> bool:
+        label = (node.get("meta_label") or "").lower()
+        if label:
+            return label == "location"
+        return node["id"] not in parents
+
+    def region_name(node: dict) -> str:
+        parent = by_id.get(node.get("parent_id") or "")
+        first = parent
+        seen: set[str] = set()
+        while parent and parent["id"] not in seen:
+            seen.add(parent["id"])
+            if (parent.get("meta_label") or "").lower() == level:
+                return (parent.get("name") or "").strip() or NO_REGION
+            parent = by_id.get(parent.get("parent_id") or "")
+        return ((first or {}).get("name") or "").strip() or NO_REGION
+
+    groups: dict[str, list[str]] = {}
+    site_names: dict[str, str] = {}
+    for node in alive:
+        if not node.get("id") or not is_leaf(node):
+            continue
+        code = (node.get("name") or "").strip().upper()
+        if not code:
+            continue
+        site_names[node["id"]] = code
+        if node.get("site_uuid"):
+            site_names[node["site_uuid"]] = code
+        if code in excluded_set:
+            continue
+        groups.setdefault(region_name(node), []).append(code)
+
+    regions = [
+        Region(name, sorted(set(codes)))
+        for name, codes in sorted(groups.items(), key=lambda kv: (kv[0] == NO_REGION, kv[0]))
+    ]
+    return Referentiel(regions, site_names)

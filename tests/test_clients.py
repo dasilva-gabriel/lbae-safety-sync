@@ -67,7 +67,7 @@ def test_retry_sur_429(mitti, router):
 
 
 def test_feed_suit_next_page(mitti, router):
-    router.get(f"{MITTI}/feed/sites", params={"show_only_leaf_nodes": "true"}).respond(
+    router.get(f"{MITTI}/feed/sites", params={"show_only_leaf_nodes": "false"}).respond(
         json={"data": [{"id": "s1"}], "metadata": {"next_page": "/feed/sites?offset=1"}}
     )
     router.get(f"{MITTI}/feed/sites", params={"offset": "1"}).respond(

@@ -11,7 +11,8 @@ hebdomadaire de maintenance par email (SMTP Brevo). Voir `README.md`.
   Vérifier les champs dans la doc plutôt que de les deviner.
 - Code et docs en français, conventions de `lbae-sherlock`. Checks : `.venv/bin/pytest` et
   `.venv/bin/ruff check . && .venv/bin/ruff format --check .`
-- Ne jamais afficher ni committer `.env` ni `parcs.toml`.
+- Ne jamais afficher ni committer `.env`.
+- Régions et parcs : lus dans l'arbre des sites Mitti (pas de fichier local).
 - Commits au nom de l'utilisateur : Gabriel DA SILVA <77939562+dasilva-gabriel@users.noreply.github.com>.
 - Planification : crontab (sync tous les jours 6h00, rapport le lundi 9h00).
 

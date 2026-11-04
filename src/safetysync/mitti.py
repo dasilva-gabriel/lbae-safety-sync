@@ -163,8 +163,10 @@ class MittiAPI(HttpApi):
         params += [("template", t) for t in template_ids]
         return self.iter_feed("/feed/inspection_items", params)
 
-    def feed_sites(self) -> Iterator[dict]:
-        return self.iter_feed("/feed/sites", {"show_only_leaf_nodes": "true"})
+    def feed_sites(self, *, leaf_only: bool = False) -> Iterator[dict]:
+        """Sites Mitti. Par défaut tout l'arbre (location, area, region…) pour les régions."""
+        flag = "true" if leaf_only else "false"
+        return self.iter_feed("/feed/sites", {"show_only_leaf_nodes": flag})
 
 
 # ---------------------------------------------------------------------- helpers

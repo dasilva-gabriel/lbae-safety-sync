@@ -31,6 +31,7 @@ from safetysync.config import (
 from safetysync.logs import setup_logging
 from safetysync.mailer import SmtpMailer
 from safetysync.mitti import MittiAPI
+from safetysync.parcs import referentiel_from_sites
 from safetysync.smartsheet import SmartsheetAPI
 from safetysync.transfer import SheetCache, run_transfer
 
@@ -140,10 +141,17 @@ def diagnostic() -> int:
     settings = get_sync_settings()
     mitti, ss = _clients()
     with mitti, ss:
-        sites = list(mitti.feed_sites())
-        print(f"Mitti : {len(sites)} site(s)")
-        for s in sorted(sites, key=lambda x: x.get("name") or ""):
-            print(f"  {s.get('name')}  ({s.get('id')})")
+        nodes = list(mitti.feed_sites())
+        report_settings = get_report_settings()
+        ref = referentiel_from_sites(
+            nodes,
+            region_level=report_settings.region_level,
+            excluded=report_settings.excluded_sites,
+        )
+        levels = Counter((n.get("meta_label") or "?") for n in nodes if not n.get("deleted"))
+        print(f"Mitti : {len(ref.parcs)} parc(s), niveaux de l'arbre : {dict(levels)}")
+        for region in ref.regions:
+            print(f"  {region.nom} : {', '.join(region.parcs)}")
         since = datetime.now(settings.tz) - timedelta(days=14)
         templates: Counter = Counter()
         for raw in mitti.feed_inspections([], since):
@@ -153,7 +161,7 @@ def diagnostic() -> int:
             print(f"  {n:5d}  {name}  ->  {tid}")
 
         sheets = SheetCache(ss, settings)
-        site_names = {(s.get("name") or "").strip().upper() for s in sites}
+        site_names = set(ref.site_names.values())
         print(f"\nSmartsheet : {len(sheets.by_site)} feuille(s) Travaux")
         for site in sorted(sheets.by_site):
             sheet = sheets.for_site(site)

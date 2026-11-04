@@ -48,7 +48,7 @@ def render(report: WeeklyReport) -> str:
     for region in report.referentiel.regions:
         if not region.parcs:
             continue
-        title = region.nom + (f" — {region.responsable}" if region.responsable else "")
+        title = region.nom
         parts.append(f'<h3 style="color:{HEAD}">Région : {escape(title)}</h3>')
         parts.append(_inspections_table(report, region.parcs))
         parts.append(_actions_table(report, region.parcs))

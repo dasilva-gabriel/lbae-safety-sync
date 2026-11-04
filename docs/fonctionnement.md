@@ -37,7 +37,14 @@ Les actions Mitti des 730 derniers jours sont indexées (`SAFETYSYNC_COMPLETION_
 ## Rapport hebdomadaire (`safety-sync rapport`, lundi 9h00)
 
 Couvre la semaine précédente (lundi → dimanche). Envoyé par SMTP (relais Brevo, variables `SMTP_*` et `EMAIL_FROM`) à `SAFETYSYNC_REPORT_TO`
-(+ `SAFETYSYNC_REPORT_CC`). Régions et parcs : `parcs.toml`.
+(+ `SAFETYSYNC_REPORT_CC`).
+
+**Régions et parcs** : lus dans Mitti (data feed des sites, arbre complet). Un parc est un site
+de niveau « location » ; sa région est son ancêtre de niveau « region »
+(`SAFETYSYNC_REGION_LEVEL`), à défaut son parent direct, sinon « Sans région ». Les sites
+supprimés sont ignorés ; `SAFETYSYNC_EXCLUDED_SITES` masque des sites (tests, parcs fermés).
+Un parc vu dans les actions ou inspections mais absent de l'arbre est listé dans
+« Autres parcs (hors arbre Mitti) ».
 
 | Règle | Description |
 |---|---|

@@ -16,13 +16,12 @@ cd lbae-safety-sync
 python3 -m venv .venv
 .venv/bin/pip install -e '.[dev]'
 cp .env.example .env            # puis renseigner les tokens (comptes de service)
-cp parcs.example.toml parcs.toml  # puis compléter régions et parcs
 ```
 
 ## Premier lancement
 
 ```bash
-.venv/bin/safety-sync diagnostic          # accès, IDs des trames, sites, feuilles Travaux
+.venv/bin/safety-sync diagnostic          # accès, régions/parcs Mitti, IDs des trames, feuilles
 .venv/bin/safety-sync sync --dry-run      # ce qui serait fait, sans rien modifier
 .venv/bin/safety-sync rapport --dry-run   # écrit le HTML dans rapports/ sans l'envoyer
 ```
