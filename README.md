@@ -26,8 +26,8 @@ cp .env.example .env            # puis renseigner les tokens (comptes de service
 .venv/bin/safety-sync rapport --dry-run   # écrit le HTML dans rapports/ sans l'envoyer
 ```
 
-Reporter les IDs des trames Journalier et Hebdo affichés par `diagnostic` dans
-`SAFETYSYNC_JOURNALIER_TEMPLATE_IDS` / `SAFETYSYNC_HEBDO_TEMPLATE_IDS`.
+Les trames sont trouvées par mot-clé dans leur nom (`SAFETYSYNC_JOURNALIER_TEMPLATES=Journalier`,
+`SAFETYSYNC_HEBDO_TEMPLATES=Hebdo` par défaut) ; `diagnostic` affiche les trames retenues.
 
 ## Commandes
 

@@ -35,8 +35,8 @@ def sync_settings() -> SyncSettings:
 @pytest.fixture
 def report_settings(tmp_path) -> ReportSettings:
     return ReportSettings(
-        journalier_template_ids=["tpl_j"],
-        hebdo_template_ids=["tpl_h"],
+        journalier_templates="template_j",
+        hebdo_templates="template_h",
         output_dir=tmp_path,
         _env_file=None,
     )

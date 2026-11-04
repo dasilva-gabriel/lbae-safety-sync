@@ -13,15 +13,23 @@ from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 # Couleurs des cellules (légende du rapport)
-VERT, JAUNE, ROUGE, BLEU, GRIS = "vert", "jaune", "rouge", "bleu", "gris"
-SYMBOLS = {VERT: "✓", JAUNE: "!", ROUGE: "✗", BLEU: "A", GRIS: "–"}
+# vert = fait et cohérent, jaune = incohérent, orange = incomplet (non clôturé),
+# rouge = manquant, bleu = antidaté (saisi après le jour contrôlé), gris = fermé
+VERT, JAUNE, ORANGE, ROUGE, BLEU, GRIS = "vert", "jaune", "orange", "rouge", "bleu", "gris"
+SYMBOLS = {VERT: "✓", JAUNE: "!", ORANGE: "…", ROUGE: "✗", BLEU: "A", GRIS: "–"}
+STATE_LABELS = {
+    VERT: "Fait, cohérent",
+    JAUNE: "Incohérent",
+    ORANGE: "Incomplet / non clôturé",
+    ROUGE: "Manquant",
+    BLEU: "Antidaté",
+    GRIS: "Fermé",
+}
+# Contrôle clôturé (compte comme « fait »)
+DONE_COLORS = (VERT, JAUNE, BLEU)
 
 # États des jeux électroniques
 OK, MAINTENANCE, PANNE, INCONNU = "ok", "maintenance", "panne", "inconnu"
-
-# Plafond de la part « actions à traiter » dans le score de priorité (RAP-08) : un gros
-# stock historique ne doit pas masquer les pannes et les inspections manquées.
-ACTIONS_CAP = 8.0
 
 
 @dataclass
@@ -65,6 +73,7 @@ class DayCell:
     text: str = ""
     issues: list[str] = field(default_factory=list)
     link: str = ""
+    score: float | None = None
 
     @property
     def symbol(self) -> str:
@@ -76,13 +85,12 @@ NOT_CONFIGURED = DayCell(GRIS, "Non configuré")
 
 @dataclass
 class Thresholds:
-    """Seuils de suspicion d'une semaine (RAP-03)."""
+    """Seuils d'incohérence d'une semaine (RAP-03)."""
 
     min_duration: int  # durée sous laquelle un contrôle est « trop rapide »
     median: int | None = None  # durée médiane réseau de la semaine
     hour_start: int = 6
     hour_end: int = 23
-    recent_days: int = 14
 
 
 def thresholds(
@@ -111,7 +119,7 @@ def opening_days(
     return {d for d in days if done[d] and len(done[d] & reference) / total >= ratio}
 
 
-def _common_issues(completed: list[Inspection], th: Thresholds, open_issues: int) -> list[str]:
+def _incoherences(completed: list[Inspection], th: Thresholds, open_issues: int) -> list[str]:
     issues: list[str] = []
     durations = [i.duration for i in completed if i.duration is not None]
     if durations and max(durations) < th.min_duration:
@@ -120,9 +128,9 @@ def _common_issues(completed: list[Inspection], th: Thresholds, open_issues: int
     scores = sorted({round(i.score, 1) for i in completed if i.score is not None})
     if len(scores) > 1:
         issues.append(f"scores {pct(scores[0])}→{pct(scores[-1])}")
-    late = [i for i in completed if i.started_day and i.started_day > i.day]
-    if late:
-        issues.append(f"saisi le {late[-1].started_day:%d/%m}")
+    early = [i for i in completed if i.started_day and i.started_day < i.day]
+    if early:
+        issues.append(f"anticipé le {early[-1].started_day:%d/%m}")
     odd = [
         i for i in completed if i.started and not (th.hour_start <= i.started.hour < th.hour_end)
     ]
@@ -134,35 +142,39 @@ def _common_issues(completed: list[Inspection], th: Thresholds, open_issues: int
     return issues
 
 
+def _closed_cell(completed: list[Inspection], th: Thresholds | None, open_issues: int) -> DayCell:
+    """Contrôle clôturé : antidaté (bleu) > incohérent (jaune) > cohérent (vert)."""
+    last = completed[-1]
+    text = pct(last.score) if last.score is not None else "Fait"
+    scores = [i.score for i in completed if i.score is not None]
+    score = sum(scores) / len(scores) if scores else None
+    issues = _incoherences(completed, th, open_issues) if th else []
+    late = [i for i in completed if i.started_day and i.started_day > i.day]
+    if late:
+        issues = [f"saisi le {late[-1].started_day:%d/%m}"] + issues
+        return DayCell(BLEU, text, issues, last.link, score)
+    return DayCell(JAUNE if issues else VERT, text, issues, last.link, score)
+
+
 def day_cell(
     inspections: list[Inspection], is_open: bool, th: Thresholds, open_issues: int = 0
 ) -> DayCell:
-    """RAP-03 : couleur et alertes d'une cellule (parc × jour)."""
+    """RAP-03 : état d'une cellule (parc × jour)."""
     if not inspections:
         return DayCell(ROUGE, "Pas de journalier") if is_open else DayCell(GRIS, "Fermé")
     completed = [i for i in inspections if i.completed]
     if not completed:
-        return DayCell(JAUNE, "Incomplet", ["non terminé"], inspections[-1].link)
-    last = completed[-1]
-    text = pct(last.score) if last.score is not None else "Fait"
-    issues = _common_issues(completed, th, open_issues)
-    if issues:
-        return DayCell(JAUNE, text, issues, last.link)
-    early = [i for i in completed if i.started_day and i.started_day < i.day]
-    if early:
-        return DayCell(BLEU, text, [f"anticipé le {early[-1].started_day:%d/%m}"], last.link)
-    return DayCell(VERT, text, [], last.link)
+        return DayCell(ORANGE, "Non clôturé", ["non clôturé"], inspections[-1].link)
+    return _closed_cell(completed, th, open_issues)
 
 
 def hebdo_cell(inspections: list[Inspection], th: Thresholds | None = None) -> DayCell:
-    """RAP-04 : contrôle hebdomadaire de la semaine (mêmes alertes que le journalier)."""
+    """RAP-04 : contrôle hebdomadaire de la semaine (mêmes états que le journalier)."""
     completed = [i for i in inspections if i.completed]
     if completed:
-        issues = _common_issues(completed, th, 0) if th else []
-        text = pct(completed[-1].score) if completed[-1].score is not None else "Fait"
-        return DayCell(JAUNE if issues else VERT, text, issues, completed[-1].link)
+        return _closed_cell(completed, th, 0)
     if inspections:
-        return DayCell(JAUNE, "Incomplet", ["hebdo non terminé"], inspections[-1].link)
+        return DayCell(ORANGE, "Non clôturé", ["hebdo non clôturé"], inspections[-1].link)
     return DayCell(ROUGE, "Manquant", ["pas d'hebdo"])
 
 
@@ -248,24 +260,46 @@ def game_states(
     return result
 
 
-def breakdown_rates(
+def breakdown_counts(
     items_by_inspection: dict[str, list[dict]],
     hebdos: list[Inspection],
     prefix: str,
     start: date,
     end: date,
-) -> dict[str, tuple[int, int]]:
-    """RAP-07 : par machine, (nb de réponses « En Panne », nb de réponses) sur la période."""
-    counts: dict[str, list[int]] = defaultdict(lambda: [0, 0])
+) -> dict[tuple[str, str], tuple[int, int]]:
+    """RAP-07 : par (parc, machine), (nb de réponses « En Panne », nb de réponses).
+
+    Seule la réponse « En Panne » compte comme panne (pas « En Service mais Maintenance »).
+    """
+    counts: dict[tuple[str, str], list[int]] = defaultdict(lambda: [0, 0])
     for insp in hebdos:
         if not insp.completed or not (start <= insp.day <= end):
             continue
         for game, (state, _) in _elec_answers(items_by_inspection.get(insp.id, []), prefix).items():
             if state == INCONNU:
                 continue
-            counts[game][1] += 1
-            counts[game][0] += state == PANNE
-    return {g: (c[0], c[1]) for g, c in counts.items()}
+            counts[(insp.site, game)][1] += 1
+            counts[(insp.site, game)][0] += state == PANNE
+    return {k: (c[0], c[1]) for k, c in counts.items()}
+
+
+def sum_counts(
+    counts: dict[tuple[str, str], tuple[int, int]],
+    *,
+    site: str | None = None,
+    game: str | None = None,
+) -> tuple[int, int]:
+    """Agrège des comptes (pannes, réponses) sur un parc et/ou une machine."""
+    p = n = 0
+    for (s, g), (down, total) in counts.items():
+        if (site is None or s == site) and (game is None or g == game):
+            p += down
+            n += total
+    return p, n
+
+
+def rate(pair: tuple[int, int]) -> float | None:
+    return 100 * pair[0] / pair[1] if pair[1] else None
 
 
 def quarter_start(day: date) -> date:
@@ -304,57 +338,46 @@ class Priority:
 
 def priority(
     site: str,
-    cells: list[DayCell],
-    hebdo: DayCell,
-    games: dict[str, GameState],
     stats: ActionStats,
+    note_journaliers: float | None,
+    note_hebdo: float | None,
 ) -> Priority:
-    """RAP-08 : score de priorité d'un parc (plus il est haut, plus le parc est prioritaire)."""
-    score = 0.0
+    """RAP-08 : priorité de MAINTENANCE d'un parc, sur 100 (actions + note des contrôles).
+
+    - Note des contrôles (40 pts) : (100 − note) × 2, la note étant la moyenne de la note
+      moyenne des journaliers et de celle de l'hebdo de la semaine.
+    - Nouvelles actions de la semaine non rejetées (20 pts) : 2 pts par action.
+    - Stock d'actions à traiter (25 pts) : 0,5 pt par action.
+    - Actions anciennes, plus de 30 jours (15 pts) : 0,5 pt par action.
+    Les inspections manquantes ou incohérentes ne comptent pas ici.
+    """
     reasons: list[str] = []
-    pannes = [(g, s) for g, s in games.items() if s.state == PANNE]
-    if pannes:
-        score += sum(5 + min(s.weeks_down - 1, 4) for _, s in pannes)
+    notes = [n for n in (note_journaliers, note_hebdo) if n is not None]
+    note = sum(notes) / len(notes) if notes else None
+    score = 0.0
+    if note is not None:
+        score += min(40.0, max(0.0, (100 - note) * 2))
+        detail = []
+        if note_journaliers is not None:
+            detail.append(f"journaliers {note_journaliers:.0f} %")
+        if note_hebdo is not None:
+            detail.append(f"hebdo {note_hebdo:.0f} %")
+        reasons.append("note " + ", ".join(detail))
+    nouvelles = stats.creees - stats.rejetees
+    if nouvelles > 0:
+        score += min(20.0, 2.0 * nouvelles)
         reasons.append(
-            f"{len(pannes)} jeu{'x' if len(pannes) > 1 else ''} en panne ("
-            + ", ".join(
-                f"{g}{f' {s.weeks_down} sem.' if s.weeks_down > 1 else ''}" for g, s in pannes
-            )
-            + ")"
-        )
-    maint = [g for g, s in games.items() if s.state == MAINTENANCE]
-    if maint:
-        score += len(maint)
-        reasons.append(f"{len(maint)} jeu{'x' if len(maint) > 1 else ''} à maintenir")
-    if hebdo.color == ROUGE:
-        score += 4
-        reasons.append("hebdo manquant")
-    elif hebdo.color == JAUNE:
-        score += 2
-        reasons.append("hebdo suspect")
-    missing = sum(1 for c in cells if c.color == ROUGE)
-    doubtful = sum(1 for c in cells if c.color == JAUNE)
-    if missing:
-        score += 2 * missing
-        reasons.append(
-            f"{missing} journalier{'s' if missing > 1 else ''} manquant{'s' if missing > 1 else ''}"
-        )
-    if doubtful:
-        score += 1.5 * doubtful
-        reasons.append(
-            f"{doubtful} journalier{'s' if doubtful > 1 else ''} suspect"
-            f"{'s' if doubtful > 1 else ''}"
+            f"{nouvelles} nouvelle{'s' if nouvelles > 1 else ''} action"
+            f"{'s' if nouvelles > 1 else ''}"
         )
     if stats.a_traiter:
-        score += min(0.5 * stats.a_traiter + 0.5 * stats.anciennes, ACTIONS_CAP)
-        txt = f"{stats.a_traiter} action{'s' if stats.a_traiter > 1 else ''} à traiter"
+        score += min(25.0, 0.5 * stats.a_traiter)
+        txt = f"{stats.a_traiter} à traiter"
         if stats.anciennes:
-            txt += f" (dont {stats.anciennes} anciennes)"
+            score += min(15.0, 0.5 * stats.anciennes)
+            txt += f" dont {stats.anciennes} de plus de 30 j"
         reasons.append(txt)
-    if stats.ouvertes:
-        score += 0.5 * stats.ouvertes
-        reasons.append(f"{stats.ouvertes} action(s) non transférée(s)")
-    return Priority(site, round(score, 1), reasons)
+    return Priority(site, round(score), reasons)
 
 
 # ---------------------------------------------------------------------- tendances

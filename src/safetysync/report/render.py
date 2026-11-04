@@ -19,13 +19,20 @@ from safetysync.report.analysis import (
     BLEU,
     GRIS,
     JAUNE,
+    MAINTENANCE,
+    OK,
+    ORANGE,
+    PANNE,
     ROUGE,
+    STATE_LABELS,
     VERT,
     DayCell,
     Kpi,
     fmt_duration,
+    rate,
+    sum_counts,
 )
-from safetysync.report.collect import MachineRate, WeeklyReport
+from safetysync.report.collect import WeeklyReport
 
 LOGO_PATH = Path(__file__).with_name("logo.png")
 
@@ -41,6 +48,7 @@ SOFT = "#F6F6F6"
 CELL = {
     VERT: ("#C9EBCB", "#1E6B2A"),
     JAUNE: ("#FFE08A", "#7A5200"),
+    ORANGE: ("#FFC48C", "#8A3B00"),
     ROUGE: ("#F6B3B3", "#9B1111"),
     BLEU: ("#C7DDF7", "#1F4E8C"),
     GRIS: ("#EFEFEF", "#A0A0A0"),
@@ -67,12 +75,13 @@ def render(report: WeeklyReport, logo_src: str = "cid:logo") -> str:
         _kpis(report.kpis),
         _section(
             f"Top {report.priority_top} des parcs prioritaires",
-            "Pannes, contrôles manquants ou suspects, stock d'actions.",
+            "Priorité de maintenance (sur 100) : note des contrôles et actions (nouvelles, "
+            "stock, ancienneté).",
         ),
         _top(report),
         _section(
             "Inspections de la semaine",
-            "H = hebdo, puis un journalier par jour. Cliquez une case pour ouvrir le rapport.",
+            "Un journalier par jour, puis l'hebdo (H). Cliquez une case pour ouvrir le rapport.",
         ),
         _inspections(report),
         _legend(report),
@@ -80,8 +89,8 @@ def render(report: WeeklyReport, logo_src: str = "cid:logo") -> str:
         _actions(report),
         _section(
             "Focus jeux électroniques",
-            f"Taux de panne = part des réponses « En Panne » aux hebdos ({report.quarters[0]}, "
-            f"puis {report.quarters[1]} en cours).",
+            "État au dernier hebdo et taux de panne par parc et par machine "
+            f"({report.quarters[1]} en cours, {report.quarters[0]} entre parenthèses).",
         ),
         _machines(report),
         _notes(report),
@@ -192,8 +201,9 @@ def _top(report: WeeklyReport) -> str:
             f'<td valign="top" style="padding:8px;{cell}font-size:12px;color:{INK};'
             f'line-height:17px">{escape(" · ".join(p.reasons))}</td>'
             f'<td width="48" align="right" valign="top" style="padding:8px 0;{cell}'
-            f'font-size:10px;color:{MUTED}">score<br>'
-            f'<b style="font-size:15px;color:{INK}">{p.score:g}</b></td></tr>'
+            f'font-size:10px;color:{MUTED}">priorité<br>'
+            f'<b style="font-size:15px;color:{INK}">{p.score:g}</b>'
+            f'<span style="font-size:10px">/100</span></td></tr>'
         )
     return _row(f"<table {TABLE}>{''.join(rows)}</table>")
 
@@ -221,91 +231,108 @@ def _short(issue: str) -> str:
 
 
 def _alerts(cells: list[DayCell], hebdo: DayCell, days) -> str:
+    """Alertes courtes : incohérences, antidatés, non clôturés (jour par jour, puis hebdo)."""
+    flagged = (JAUNE, BLEU, ORANGE)
     items = []
-    if hebdo.color == JAUNE:
-        items.append(f"<b>H</b> {escape(', '.join(_short(i) for i in hebdo.issues))}")
     for day, cell in zip(days, cells, strict=False):
-        if cell.color == JAUNE:
+        if cell.color in flagged:
             text = ", ".join(_short(i) for i in cell.issues)
             items.append(f"<b>{JOURS_LONG[day.weekday()]}</b> {escape(text)}")
+    if hebdo.color in flagged:
+        items.append(f"<b>H</b> {escape(', '.join(_short(i) for i in hebdo.issues))}")
     if len(items) > 3:
         items = items[:3] + [f"+{len(items) - 3}"]
     return " · ".join(items) or "&nbsp;"
+
+
+def _spacer(width: int = 10) -> str:
+    return f'<td width="{width}" style="font-size:0;line-height:0">&nbsp;</td>'
+
+
+def _region_rows(name: str, summary: str, colspan: int) -> str:
+    return (
+        f'<tr><td colspan="{colspan}" style="padding-top:8px;font-size:0;line-height:0">&nbsp;'
+        "</td></tr>"
+        f'<tr><td colspan="{colspan}" bgcolor="{SOFT}" style="padding:5px 6px;{FONT}'
+        f'font-size:12px;font-weight:bold;color:{INK}">{escape(name)} '
+        f'<span style="font-weight:normal;color:{MUTED}">{summary}</span></td></tr>'
+    )
 
 
 def _inspections(report: WeeklyReport) -> str:
     view = report.current
     small = f"{FONT}font-size:11px;font-weight:bold;"
     head = f'<td style="{FONT}font-size:11px;color:{MUTED};padding:0 4px">Parc</td>'
-    head += f'<td width="26" align="center" style="{small}color:{INK}">H</td>'
     for d in view.days:
         color = INK if d in view.open_days else "#BBBBBB"
         head += (
             f'<td width="26" align="center" style="{small}color:{color}">{JOURS[d.weekday()]}'
             f'<br><span style="font-weight:normal;font-size:9px">{d:%d}</span></td>'
         )
+    head += _spacer() + f'<td width="26" align="center" style="{small}color:{INK}">H</td>'
     head += f'<td style="{FONT}font-size:11px;color:{MUTED};padding-left:8px">Alertes</td>'
     rows = [f"<tr>{head}</tr>"]
     for region in report.referentiel.regions:
-        counts = view.counts(region.parcs)
+        c = view.counts(region.parcs)
         summary = (
-            f"journaliers {counts['done']}/{counts['expected']} · hebdos "
-            f"{counts['hebdos']}/{len(region.parcs)}"
-            + (f" · {counts['suspects']} suspect(s)" if counts["suspects"] else "")
+            f"— journaliers {c['done']}/{c['expected']} · hebdos {c['hebdos']}/"
+            f"{len(region.parcs)}"
+            + (f" · {c['incoherents']} incohérent(s)" if c["incoherents"] else "")
+            + (f" · {c['incomplets']} non clôturé(s)" if c["incomplets"] else "")
         )
-        rows.append(
-            f'<tr><td colspan="10" style="padding-top:8px;font-size:0;line-height:0">&nbsp;'
-            f"</td></tr>"
-            f'<tr><td colspan="10" bgcolor="{SOFT}" style="padding:5px 6px;{FONT}font-size:12px;'
-            f'font-weight:bold;color:{INK}">{escape(region.nom)} '
-            f'<span style="font-weight:normal;color:{MUTED}">— {summary}</span></td></tr>'
-        )
+        rows.append(_region_rows(region.nom, summary, 11))
         for parc in region.parcs:
             cells = view.day_cells[parc]
             hebdo = view.hebdo[parc]
             rows.append(
                 f'<tr><td width="74" style="padding:0 4px;{FONT}font-size:12px;font-weight:bold;'
                 f'color:{INK};white-space:nowrap">{escape(parc)}</td>'
-                + _status_cell(hebdo)
                 + "".join(_status_cell(c) for c in cells)
+                + _spacer()
+                + _status_cell(hebdo)
                 + f'<td style="padding:0 0 0 8px;{FONT}font-size:11px;color:#6B4A00;'
                 f'line-height:14px">{_alerts(cells, hebdo, view.days)}</td></tr>'
             )
     return _row(f"<table {TABLE}>{''.join(rows)}</table>")
 
 
-def _legend(report: WeeklyReport) -> str:
-    items = [
-        (VERT, "fait, cohérent"),
-        (JAUNE, "suspect / incomplet"),
-        (ROUGE, "manquant"),
-        (BLEU, "anticipé"),
-        (GRIS, f"fermé (< {report.opening_ratio:.0%} du réseau)"),
-    ]
+def _legend_cells(items: list[tuple[str, str, str, str]]) -> str:
+    """(fond, texte, symbole, libellé) → une ligne de légende."""
     parts = []
-    for color, text in items:
-        bg, fg = CELL[color]
+    for bg, fg, symbol, text in items:
         parts.append(
             f'<td bgcolor="{bg}" width="18" height="18" align="center" style="{FONT}'
-            f'font-size:11px;font-weight:bold;color:{fg}">{DayCell(color).symbol}</td>'
-            f'<td style="{FONT}font-size:11px;color:{MUTED};padding:0 12px 0 4px;'
+            f'font-size:11px;font-weight:bold;color:{fg}">{escape(symbol)}</td>'
+            f'<td style="{FONT}font-size:11px;color:{MUTED};padding:0 10px 0 4px;'
             f'white-space:nowrap">{escape(text)}</td>'
         )
-    median = report.current.journalier_median
-    median_txt = f", soit {fmt_duration(median)} cette semaine" if median else ""
-    note = _text(
-        "<b>Alertes</b> : « 3 min » = contrôle trop rapide (sous 40 % de la durée médiane du "
-        f"réseau{median_txt}) ; « 02h00 » = fait à une heure inhabituelle ; « saisi le » = "
-        "rempli après coup ; « scores x→y » = plusieurs contrôles le même jour ; « 100 % malgré "
-        "N pb » = tout conforme alors que le parc a des jeux en panne ou des actions signalées "
-        "depuis moins de 14 jours. Détail au survol de chaque case."
-    )
-    return _row(
+    return (
         '<table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>'
         f'<td height="8" style="font-size:0;line-height:0">&nbsp;</td></tr></table>'
         '<table role="presentation" cellpadding="0" cellspacing="0" border="0">'
-        f"<tr>{''.join(parts)}</tr></table>{note}"
+        f"<tr>{''.join(parts)}</tr></table>"
     )
+
+
+def _legend(report: WeeklyReport) -> str:
+    items = []
+    for color in (VERT, JAUNE, ORANGE, ROUGE, BLEU, GRIS):
+        bg, fg = CELL[color]
+        label = STATE_LABELS[color]
+        if color == GRIS:
+            label += f" (< {report.opening_ratio:.0%} du réseau)"
+        items.append((bg, fg, DayCell(color).symbol, label))
+    median = report.current.journalier_median
+    median_txt = f", soit {fmt_duration(median)} cette semaine" if median else ""
+    note = _text(
+        "<b>Incohérent</b> : « 3 min » = trop rapide (sous 40 % de la durée médiane du "
+        f"réseau{median_txt}) ; « 02h00 » = heure inhabituelle ; « anticipé » = commencé avant "
+        "le jour contrôlé ; « scores x→y » = plusieurs contrôles différents le même jour ; "
+        "« 100 % malgré N pb » = tout conforme alors que le parc a des jeux en panne ou des "
+        "actions signalées depuis moins de 14 jours. <b>Antidaté</b> : rempli après le jour "
+        "contrôlé (« saisi le »). Détail au survol de chaque case."
+    )
+    return _row(_legend_cells(items) + note)
 
 
 def _num(value: int, bad: bool = False) -> str:
@@ -406,76 +433,167 @@ def _actions(report: WeeklyReport) -> str:
     return _row(intro + f"<table {TABLE}>{''.join(rows)}</table>{note}")
 
 
-def _rate_bar(rate: float | None, n: int) -> str:
-    if rate is None:
-        return f'<span style="{FONT}font-size:11px;color:#BBBBBB">pas de donnée</span>'
-    width = min(max(int(round(rate)), 1), 100)
-    color = "#C62828" if rate >= 20 else "#F28A2E" if rate >= 10 else "#43A047"
+SHORT_GAMES = {
+    "kartings": "Karting",
+    "air hockey": "Air hockey",
+    "machines à pinces avec peluches": "Pinces peluches",
+    "machines à pinces sans peluches": "Pinces sans pel.",
+    "jeux avec marteau": "Marteau",
+    "carrousels": "Carrousel",
+    "babyfoots": "Baby-foot",
+    "flippers": "Flipper",
+    '"zones tap-tap" (cibles)': "Tap-Tap",
+    "kid challenge": "Kid Challenge",
+    "néo expérience": "Néo Exp.",
+}
+GAME_CELL = {
+    OK: ("#C9EBCB", "#1E6B2A"),
+    MAINTENANCE: ("#FFE08A", "#7A5200"),
+    PANNE: ("#F6B3B3", "#9B1111"),
+}
+
+
+def short_game(name: str) -> str:
+    return SHORT_GAMES.get(name.lower(), name if len(name) <= 14 else name[:13] + ".")
+
+
+def _rate_txt(pair: tuple[int, int]) -> str:
+    value = rate(pair)
+    return "-" if value is None else f"{value:.0f} %"
+
+
+def _game_cell(state, cur: tuple[int, int], prev: tuple[int, int], width: int) -> str:
+    """Case parc × machine : fond = état au dernier hebdo, texte = taux de panne T (T-1)."""
+    if state is None and not cur[1] and not prev[1]:
+        return (
+            f'<td width="{width}" align="center" bgcolor="#FAFAFA" style="border:2px solid '
+            f'#FFFFFF;{FONT}font-size:11px;color:#CCCCCC">–</td>'
+        )
+    bg, fg = GAME_CELL.get(state.state if state else None, ("#EFEFEF", "#666666"))
+    second = f"({_rate_txt(prev)})"
+    if state and state.state == PANNE and state.weeks_down > 1:
+        second = f"<b>{state.weeks_down} sem.</b>"
+    title = escape(
+        f"{STATE_TXT.get(state.state, '?') if state else 'pas d hebdo récent'} ; "
+        f"taux de panne {_rate_txt(cur)} sur {cur[1]} hebdo(s), trimestre précédent "
+        f"{_rate_txt(prev)} sur {prev[1]}"
+        + (f" ; {state.comment}" if state and state.comment else "")
+    )
     return (
-        '<table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>'
-        f'<td width="80" bgcolor="#EEEEEE" style="font-size:0;line-height:0">'
-        f'<table role="presentation" width="{width}%" cellpadding="0" cellspacing="0" '
-        f'border="0"><tr><td bgcolor="{color}" height="8" style="font-size:0;line-height:0">'
-        "&nbsp;</td></tr></table></td>"
-        f'<td style="padding-left:6px;{FONT}font-size:12px;font-weight:bold;color:{INK};'
-        f'white-space:nowrap">{rate:.0f} %<span style="font-weight:normal;font-size:10px;'
-        f'color:{MUTED}"> sur {n}</span></td></tr></table>'
+        f'<td width="{width}" height="30" align="center" bgcolor="{bg}" title="{title}" '
+        f'style="border:2px solid #FFFFFF;{FONT}color:{fg};line-height:12px">'
+        f'<span style="font-size:11px;font-weight:bold;{"opacity:.55;" if not cur[0] else ""}'
+        f'color:{fg if cur[0] else "#6E9C72"}">{_rate_txt(cur)}</span><br>'
+        f'<span style="font-size:9px">{second}</span></td>'
     )
 
 
+STATE_TXT = {OK: "OK et en service", MAINTENANCE: "en service mais maintenance", PANNE: "EN PANNE"}
+
+
 def _machines(report: WeeklyReport) -> str:
-    if not report.machines:
+    machines = sorted(report.machines, key=lambda m: short_game(m).lower())
+    if not machines:
         return _row(
             _text(
                 "Aucune réponse « jeux électroniques » trouvée dans les hebdos "
-                "(vérifier SAFETYSYNC_HEBDO_TEMPLATE_IDS).",
+                "(vérifier SAFETYSYNC_HEBDO_TEMPLATES).",
                 12,
                 MUTED,
                 0,
             )
         )
-    q_prev, q_cur = report.quarters
-    head = "".join(
-        f'<td style="padding:4px;{FONT}font-size:11px;color:{MUTED};'
-        f'border-bottom:2px solid {INK}">{h}</td>'
-        for h in ("Machine", q_prev, f"{q_cur} (en cours)", "Évol.", "En panne aujourd'hui")
+    cur, prev = report.breakdowns_cur, report.breakdowns_prev
+    width = max(40, min(56, (WIDTH - 48 - 74 - 56) // len(machines)))
+    head = f'<td style="{FONT}font-size:11px;color:{MUTED};padding:0 4px">Parc</td>'
+    head += "".join(
+        f'<td width="{width}" align="center" valign="bottom" style="{FONT}font-size:9px;'
+        f'font-weight:bold;color:{INK};line-height:11px;padding-bottom:3px">'
+        f"{escape(short_game(m))}</td>"
+        for m in machines
     )
-    rows = [f"<tr>{head}</tr>"]
-    cell = f"border-bottom:1px solid {LINE};{FONT}"
-    for m in report.machines:
-        prev_rate, cur_rate = MachineRate.rate(m.prev), MachineRate.rate(m.cur)
-        if prev_rate is None or cur_rate is None:
-            evol = '<span style="color:#888888">-</span>'
-        else:
-            diff = cur_rate - prev_rate
-            color = TONE["bad"] if diff > 1 else TONE["good"] if diff < -1 else "#888888"
-            arrow = "▲" if diff > 1 else "▼" if diff < -1 else "="
-            evol = f'<span style="color:{color};font-weight:bold">{arrow} {diff:+.0f} pts</span>'
-        down = (
-            ", ".join(f"<b>{escape(p)}</b>{f' ({w} sem.)' if w > 1 else ''}" for p, w in m.down_now)
-            or '<span style="color:#BBBBBB">aucun</span>'
+    head += (
+        f'<td width="56" align="center" valign="bottom" style="{FONT}font-size:9px;'
+        f'font-weight:bold;color:{INK};padding-bottom:3px">Parc</td>'
+    )
+    colspan = len(machines) + 2
+
+    def total_cell(c: tuple[int, int], p: tuple[int, int], bold: bool = True) -> str:
+        weight = "bold" if bold else "normal"
+        return (
+            f'<td width="56" align="center" bgcolor="{SOFT}" style="border:2px solid #FFFFFF;'
+            f'{FONT}line-height:12px"><span style="font-size:11px;font-weight:{weight}">'
+            f'{_rate_txt(c)}</span><br><span style="font-size:9px;color:{MUTED}">'
+            f"({_rate_txt(p)})</span></td>"
         )
-        if m.maint_now:
-            down += (
-                f'<br><span style="color:{MUTED}">à maintenir : '
-                f"{escape(', '.join(m.maint_now))}</span>"
+
+    # Ligne « Réseau » : taux par machine sur tous les parcs
+    network = (
+        f'<tr><td style="padding:0 4px;{FONT}font-size:12px;font-weight:bold;color:{BRAND};'
+        f'white-space:nowrap">Réseau</td>'
+    )
+    for m in machines:
+        c, p = sum_counts(cur, game=m), sum_counts(prev, game=m)
+        down = sum(
+            1
+            for states in report.current.games.values()
+            if states.get(m) and states[m].state == PANNE
+        )
+        bg = "#F6B3B3" if down else SOFT
+        network += (
+            f'<td width="{width}" height="30" align="center" bgcolor="{bg}" style="border:2px '
+            f'solid #FFFFFF;{FONT}line-height:12px"><span style="font-size:11px;'
+            f'font-weight:bold">{_rate_txt(c)}</span><br><span style="font-size:9px;'
+            f'color:{MUTED}">({_rate_txt(p)})</span></td>'
+        )
+    network += total_cell(sum_counts(cur), sum_counts(prev)) + "</tr>"
+    rows = [f"<tr>{head}</tr>", network]
+
+    for region in report.referentiel.regions:
+        down_now = sum(
+            1
+            for parc in region.parcs
+            for g in report.current.games.get(parc, {}).values()
+            if g.state == PANNE
+        )
+        reg_cur = (
+            sum(sum_counts(cur, site=p)[0] for p in region.parcs),
+            sum(sum_counts(cur, site=p)[1] for p in region.parcs),
+        )
+        summary = f"— {down_now} jeu(x) en panne · taux {_rate_txt(reg_cur)}"
+        rows.append(_region_rows(region.nom, summary, colspan))
+        for parc in region.parcs:
+            states = report.current.games.get(parc, {})
+            cells = "".join(
+                _game_cell(
+                    states.get(m),
+                    cur.get((parc, m), (0, 0)),
+                    prev.get((parc, m), (0, 0)),
+                    width,
+                )
+                for m in machines
             )
-        rows.append(
-            f'<tr><td width="140" style="padding:6px 4px;{cell}font-size:12px;'
-            f'font-weight:bold">{escape(m.name)}</td>'
-            f'<td width="140" style="{cell}">{_rate_bar(prev_rate, m.prev[1])}</td>'
-            f'<td width="140" style="{cell}">{_rate_bar(cur_rate, m.cur[1])}</td>'
-            f'<td width="70" style="{cell}font-size:11px">{evol}</td>'
-            f'<td style="{cell}font-size:11px;color:{INK};line-height:15px;padding:6px 0">'
-            f"{down}</td></tr>"
-        )
-    return _row(
-        f"<table {TABLE}>{''.join(rows)}</table>"
-        + _text(
-            "Barre verte < 10 %, orange 10–20 %, rouge ≥ 20 %. « sur N » = nombre de "
-            "réponses à la question sur le trimestre (tous parcs)."
-        )
+            rows.append(
+                f'<tr><td width="74" style="padding:0 4px;{FONT}font-size:12px;font-weight:bold;'
+                f'color:{INK};white-space:nowrap">{escape(parc)}</td>{cells}'
+                + total_cell(sum_counts(cur, site=parc), sum_counts(prev, site=parc), False)
+                + "</tr>"
+            )
+    legend = _legend_cells(
+        [
+            (*GAME_CELL[OK], "✓", "OK au dernier hebdo"),
+            (*GAME_CELL[MAINTENANCE], "!", "en service mais maintenance"),
+            (*GAME_CELL[PANNE], "✗", "en panne"),
+            ("#FAFAFA", "#CCCCCC", "–", "machine absente"),
+        ]
     )
+    note = _text(
+        f"Dans chaque case : taux de panne du {report.quarters[1]} (en cours) puis, entre "
+        f"parenthèses, du {report.quarters[0]}. Taux de panne = réponses « En Panne » / "
+        "réponses à la question dans les hebdos terminés (« En Service mais Maintenance » "
+        "n'est pas une panne). « 3 sem. » = en panne depuis 3 hebdos consécutifs."
+    )
+    return _row(f"<table {TABLE}>{''.join(rows)}</table>" + legend + note)
 
 
 def _notes(report: WeeklyReport) -> str:

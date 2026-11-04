@@ -9,6 +9,7 @@ from safetysync.report.analysis import (
     BLEU,
     GRIS,
     JAUNE,
+    ORANGE,
     PANNE,
     ROUGE,
     VERT,
@@ -18,7 +19,7 @@ from safetysync.report.analysis import (
     Inspection,
     Kpi,
     Thresholds,
-    breakdown_rates,
+    breakdown_counts,
     day_cell,
     game_name,
     game_states,
@@ -27,6 +28,7 @@ from safetysync.report.analysis import (
     previous_quarter_start,
     priority,
     quarter_label,
+    sum_counts,
     thresholds,
     week_days,
 )
@@ -67,15 +69,17 @@ def test_cellules_journalier():
     d = MONDAY
     assert day_cell([], True, TH).color == ROUGE
     assert day_cell([], False, TH).color == GRIS
-    assert day_cell([insp("A", d)], True, TH) == DayCell(VERT, "90 %", [], "https://r")
-    assert day_cell([insp("A", d, completed=False)], True, TH).color == JAUNE
+    assert day_cell([insp("A", d)], True, TH) == DayCell(VERT, "90 %", [], "https://r", 90.0)
+    assert day_cell([insp("A", d, completed=False)], True, TH).color == ORANGE
     short = day_cell([insp("A", d, duration=157)], True, TH)
     assert short.color == JAUNE and short.issues == ["trop rapide 3 min (méd. 15 min)"]
     two = day_cell([insp("A", d, score=71.429), insp("A", d, score=92.857)], True, TH)
     assert two.issues == ["scores 71.4 %→92.9 %"]
-    assert day_cell([insp("A", d, started=date(2026, 10, 18))], True, TH).color == BLEU
-    late = day_cell([insp("A", d, started=date(2026, 10, 21))], True, TH)
-    assert late.issues == ["saisi le 21/10"]
+    early = day_cell([insp("A", d, started=date(2026, 10, 18))], True, TH)
+    assert early.color == JAUNE and early.issues == ["anticipé le 18/10"]
+    late = day_cell([insp("A", d, started=date(2026, 10, 21), duration=100)], True, TH)
+    assert late.color == BLEU  # antidaté, même s'il est aussi trop rapide
+    assert late.issues[0] == "saisi le 21/10"
     night = day_cell([insp("A", d, hour=2)], True, TH)
     assert night.issues == ["fait à 02h00"]
     perfect = day_cell([insp("A", d, score=100.0)], True, TH, open_issues=3)
@@ -86,7 +90,7 @@ def test_cellules_journalier():
 def test_cellule_hebdo():
     assert hebdo_cell([]).color == ROUGE
     assert hebdo_cell([insp("A", MONDAY)]).color == VERT
-    assert hebdo_cell([insp("A", MONDAY, completed=False)]).color == JAUNE
+    assert hebdo_cell([insp("A", MONDAY, completed=False)]).color == ORANGE
     fast = hebdo_cell([insp("A", MONDAY, duration=200)], Thresholds(900, 2400))
     assert fast.color == JAUNE and fast.issues[0].startswith("trop rapide")
 
@@ -145,28 +149,25 @@ def test_taux_de_panne_et_trimestres():
         "c": [{"label": KART, "response": "OK et En Service"}],
         "d": [{"label": KART, "response": "En Panne"}],  # non terminé : ignoré
     }
-    rates = breakdown_rates(items, hebdos, "[Jeu Elec.]", date(2026, 7, 1), date(2026, 9, 30))
-    assert rates == {"Kartings": (1, 2)}
+    counts = breakdown_counts(items, hebdos, "[Jeu Elec.]", date(2026, 7, 1), date(2026, 9, 30))
+    assert counts == {("A", "Kartings"): (1, 1), ("B", "Kartings"): (0, 1)}
+    assert sum_counts(counts, game="Kartings") == (1, 2)
+    assert sum_counts(counts, site="B") == (0, 1)
 
 
-def test_priorite():
-    cells = [DayCell(ROUGE)] * 2 + [DayCell(JAUNE)] + [DayCell(VERT)] * 4
-    p = priority(
-        "A",
-        cells,
-        DayCell(ROUGE),
-        {"Kartings": GameState(PANNE, 3)},
-        ActionStats(a_traiter=4, anciennes=2),
-    )
-    # panne 5+2, hebdo 4, 2 manquants 4, 1 suspect 1.5, actions 3
-    assert p.score == 19.5
-    assert p.reasons[0] == "1 jeu en panne (Kartings 3 sem.)"
-    big = priority(
-        "B", [DayCell(VERT)] * 7, DayCell(VERT), {}, ActionStats(a_traiter=167, anciennes=157)
-    )
-    assert big.score == 8  # plafond
-    calm = priority("C", [DayCell(VERT)] * 7, DayCell(VERT), {}, ActionStats())
-    assert calm.score == 0 and calm.reasons == []
+def test_priorite_maintenance():
+    stats = ActionStats(creees=6, rejetees=1, a_traiter=30, anciennes=10)
+    p = priority("A", stats, 85.0, 75.0)
+    # note (85+75)/2 = 80 → 40 ; 5 nouvelles → 10 ; 30 à traiter → 15 ; 10 anciennes → 5
+    assert p.score == 70
+    assert p.reasons == [
+        "note journaliers 85 %, hebdo 75 %",
+        "5 nouvelles actions",
+        "30 à traiter dont 10 de plus de 30 j",
+    ]
+    big = priority("B", ActionStats(a_traiter=500, anciennes=400), None, None)
+    assert big.score == 40  # plafonds 25 + 15
+    assert priority("C", ActionStats(), 100.0, None).score == 0
 
 
 def test_tendances():
@@ -225,7 +226,7 @@ def test_collecte_et_rendu(mitti, ss, router, report_settings, sync_settings):
             ]
         }
     )
-    router.get(f"{MITTI}/feed/inspections", params={"template": "tpl_j"}).respond(
+    router.get(f"{MITTI}/feed/inspections", params={"template": "template_j"}).respond(
         json={
             "data": [
                 _journalier(1, "s1", "2026-10-19"),
@@ -237,7 +238,7 @@ def test_collecte_et_rendu(mitti, ss, router, report_settings, sync_settings):
             ]
         }
     )
-    router.get(f"{MITTI}/feed/inspections", params={"template": "tpl_h"}).respond(
+    router.get(f"{MITTI}/feed/inspections", params={"template": "template_h"}).respond(
         json={
             "data": [
                 _journalier(9, "s1", "2026-10-21") | {"id": "h1", "duration": 3000},
@@ -288,6 +289,7 @@ def test_collecte_et_rendu(mitti, ss, router, report_settings, sync_settings):
     assert cur.open_days == {date(2026, 10, 19), date(2026, 10, 20), date(2026, 10, 21)}
     a = cur.day_cells["GP-A"]
     assert [c.color for c in a[:4]] == [VERT, ROUGE, JAUNE, GRIS]
+    assert a[0].score == 95.0
     assert a[2].issues == ["fait à 03h00"]
     b = cur.day_cells["GP-B"][0]
     assert b.color == JAUNE and b.issues[0].startswith("trop rapide 2 min")
@@ -308,14 +310,11 @@ def test_collecte_et_rendu(mitti, ss, router, report_settings, sync_settings):
     assert kpis["Taux de rejet"].value == "33 %"
 
     assert rep.quarters == ("T3 2026", "T4 2026")
-    flip = rep.machines[0]
-    assert (flip.name, flip.prev, flip.cur, flip.down_now) == (
-        "Flippers",
-        (0, 1),
-        (1, 1),
-        [("GP-A", 1)],
-    )
-    assert rep.priorities[0].site == "GP-A"
+    assert rep.machines == ["Flippers"]
+    assert rep.breakdowns_prev == {("GP-A", "Flippers"): (0, 1)}
+    assert rep.breakdowns_cur == {("GP-A", "Flippers"): (1, 1)}
+    top = rep.priorities[0]
+    assert top.site == "GP-A" and top.reasons[0] == "note journaliers 95 %, hebdo 95 %"
 
     html = render(rep)
     assert subject(rep) == "Rapport maintenance du réseau du 19/10/2026 au 25/10/2026"
@@ -331,6 +330,7 @@ def test_collecte_et_rendu(mitti, ss, router, report_settings, sync_settings):
         "T3 2026",
     ):
         assert text in html, text
+    assert "Flipper" in html and "100 %" in html and "(0 %)" in html
     order = [
         html.index(t)
         for t in ("État du réseau", "Top 5", "Inspections de", "Focus actions", "Focus jeux")
@@ -339,8 +339,11 @@ def test_collecte_et_rendu(mitti, ss, router, report_settings, sync_settings):
 
 
 def test_trames_non_configurees(mitti, ss, router, report_settings, sync_settings):
-    report_settings.journalier_template_ids = []
-    report_settings.hebdo_template_ids = []
+    report_settings.journalier_templates = "Introuvable"
+    report_settings.hebdo_templates = ""
+    router.get(f"{MITTI}/feed/templates").respond(
+        json={"data": [{"id": "template_x", "name": "Autre contrôle"}]}
+    )
     router.get(f"{MITTI}/feed/sites").respond(
         json={"data": [{"id": "s1", "name": "GP-A", "meta_label": "location"}]}
     )
@@ -353,3 +356,19 @@ def test_trames_non_configurees(mitti, ss, router, report_settings, sync_setting
     assert {c.color for c in rep.current.day_cells["GP-A"]} == {GRIS}
     assert rep.priorities[0].score == 0
     assert "Aucune réponse « jeux électroniques »" in render(rep)
+
+
+def test_trames_par_mot_cle(mitti, router):
+    router.get(f"{MITTI}/feed/templates", params={"archived": "both"}).respond(
+        json={
+            "data": [
+                {"id": "template_1", "name": "Contrôle Hebdomadaire - Hygiène et Sécurité [v5]"},
+                {"id": "template_0", "name": "Contrôle HEBDOMADAIRE [v4]", "archived": True},
+                {"id": "template_2", "name": "Contrôle Journalier - Hygiène et Sécurité [v5]"},
+            ]
+        }
+    )
+    found = mitti.resolve_templates("hebdo, template_9")
+    assert [i for i, _ in found] == ["template_9", "template_1", "template_0"]
+    assert [i for i, _ in mitti.resolve_templates("Journalier")] == ["template_2"]
+    assert router.calls.call_count == 1  # liste des trames lue une seule fois

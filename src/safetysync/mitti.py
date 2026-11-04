@@ -51,6 +51,7 @@ class MittiAPI(HttpApi):
             **kw,
         )
         self.settings = settings
+        self._templates: list[dict] | None = None
 
     # ------------------------------------------------------------------ actions
     def iter_actions(
@@ -162,6 +163,25 @@ class MittiAPI(HttpApi):
         params = [("modified_after", _iso(modified_after)), ("completed", "true")]
         params += [("template", t) for t in template_ids]
         return self.iter_feed("/feed/inspection_items", params)
+
+    def feed_templates(self) -> Iterator[dict]:
+        """Toutes les trames, archivées comprises (anciennes versions des contrôles)."""
+        return self.iter_feed("/feed/templates", {"archived": "both"})
+
+    def resolve_templates(self, spec: str) -> list[tuple[str, str]]:
+        """« Hebdo, template_123 » → [(id, nom)] : mots-clés cherchés dans le nom des trames
+        (insensible à la casse), IDs « template_… » gardés tels quels."""
+        tokens = [t.strip() for t in (spec or "").split(",") if t.strip()]
+        found: dict[str, str] = {t: t for t in tokens if t.lower().startswith("template_")}
+        keywords = [t.lower() for t in tokens if not t.lower().startswith("template_")]
+        if keywords:
+            if self._templates is None:
+                self._templates = list(self.feed_templates())
+            for tpl in self._templates:
+                name = tpl.get("name") or ""
+                if tpl.get("id") and any(k in name.lower() for k in keywords):
+                    found[tpl["id"]] = name
+        return list(found.items())
 
     def feed_sites(self, *, leaf_only: bool = False) -> Iterator[dict]:
         """Sites Mitti. Par défaut tout l'arbre (location, area, region…) pour les régions."""

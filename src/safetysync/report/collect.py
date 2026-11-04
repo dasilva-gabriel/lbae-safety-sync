@@ -15,12 +15,12 @@ from safetysync.config import ReportSettings, SyncSettings
 from safetysync.mitti import STATUS_CANT_DO, STATUS_TODO, MittiAPI, task_site, task_status_id
 from safetysync.parcs import Referentiel, referentiel_from_sites
 from safetysync.report.analysis import (
+    BLEU,
+    DONE_COLORS,
     JAUNE,
-    MAINTENANCE,
     NOT_CONFIGURED,
+    ORANGE,
     PANNE,
-    ROUGE,
-    VERT,
     ActionStats,
     DayCell,
     GameState,
@@ -28,7 +28,7 @@ from safetysync.report.analysis import (
     Kpi,
     Priority,
     Thresholds,
-    breakdown_rates,
+    breakdown_counts,
     day_cell,
     game_states,
     hebdo_cell,
@@ -80,15 +80,16 @@ class WeekView:
         return self.days[-1]
 
     def counts(self, parcs: list[str]) -> dict:
-        expected = done = suspects = 0
+        expected = done = incoherents = incomplets = 0
         for parc in parcs:
+            cells = [*self.day_cells.get(parc, []), self.hebdo.get(parc, NOT_CONFIGURED)]
             for day, cell in zip(self.days, self.day_cells.get(parc, []), strict=False):
                 if day in self.open_days:
                     expected += 1
-                    done += cell.color != ROUGE
-                suspects += cell.color == JAUNE
-            suspects += self.hebdo.get(parc, NOT_CONFIGURED).color == JAUNE
-        hebdos = sum(1 for p in parcs if self.hebdo.get(p, NOT_CONFIGURED).color in (VERT, JAUNE))
+                    done += cell.color in DONE_COLORS
+            incoherents += sum(1 for c in cells if c.color in (JAUNE, BLEU))
+            incomplets += sum(1 for c in cells if c.color == ORANGE)
+        hebdos = sum(1 for p in parcs if self.hebdo.get(p, NOT_CONFIGURED).color in DONE_COLORS)
         stats = [self.stats.get(p, ActionStats()) for p in parcs]
         creees = sum(s.creees for s in stats)
         rejetees = sum(s.rejetees for s in stats)
@@ -97,7 +98,8 @@ class WeekView:
             "done": done,
             "journaliers_pct": 100 * done / expected if expected else None,
             "hebdos": hebdos,
-            "suspects": suspects,
+            "incoherents": incoherents,
+            "incomplets": incomplets,
             "pannes": sum(
                 1 for p in parcs for g in self.games.get(p, {}).values() if g.state == PANNE
             ),
@@ -111,26 +113,16 @@ class WeekView:
 
 
 @dataclass
-class MachineRate:
-    name: str
-    prev: tuple[int, int]  # (pannes, réponses) trimestre précédent
-    cur: tuple[int, int]  # trimestre en cours
-    down_now: list[tuple[str, int]] = field(default_factory=list)  # (parc, semaines)
-    maint_now: list[str] = field(default_factory=list)
-
-    @staticmethod
-    def rate(pair: tuple[int, int]) -> float | None:
-        return 100 * pair[0] / pair[1] if pair[1] else None
-
-
-@dataclass
 class WeeklyReport:
     referentiel: Referentiel
     current: WeekView
     previous: WeekView
     kpis: list[Kpi] = field(default_factory=list)
     priorities: list[Priority] = field(default_factory=list)
-    machines: list[MachineRate] = field(default_factory=list)
+    # Jeux électroniques : machines vues, et (pannes, réponses) par (parc, machine)
+    machines: list[str] = field(default_factory=list)
+    breakdowns_prev: dict[tuple[str, str], tuple[int, int]] = field(default_factory=dict)
+    breakdowns_cur: dict[tuple[str, str], tuple[int, int]] = field(default_factory=dict)
     quarters: tuple[str, str] = ("", "")  # (précédent, en cours)
     warnings: list[str] = field(default_factory=list)
     priority_top: int = 5
@@ -173,6 +165,8 @@ def collect_weekly(
         excluded=settings.excluded_sites,
     )
     excluded = {e.strip().upper() for e in settings.excluded_sites}
+    j_ids = _templates(mitti, settings.journalier_templates, "journalier", warnings)
+    h_ids = _templates(mitti, settings.hebdo_templates, "hebdo", warnings)
 
     def to_inspection(raw: dict) -> Inspection | None:
         site = referentiel.site_names.get(raw.get("site_id") or "", "")
@@ -181,17 +175,15 @@ def collect_weekly(
     # --- Journaliers (2 semaines)
     journaliers: list[Inspection] = []
     no_site = 0
-    if settings.journalier_template_ids:
-        for raw in mitti.feed_inspections(
-            settings.journalier_template_ids, start - timedelta(days=7)
-        ):
+    if j_ids:
+        for raw in mitti.feed_inspections(j_ids, start - timedelta(days=7)):
             insp = to_inspection(raw)
             if insp is None:
                 no_site += 1
             elif prev_monday <= insp.day <= sunday:
                 journaliers.append(insp)
     else:
-        warnings.append("SAFETYSYNC_JOURNALIER_TEMPLATE_IDS non renseigné : journaliers ignorés.")
+        warnings.append("Aucune trame journalier trouvée (SAFETYSYNC_JOURNALIER_TEMPLATES).")
 
     # --- Hebdos + réponses « jeux électroniques » (trimestre précédent → semaine)
     q_prev = previous_quarter_start(sunday)
@@ -199,18 +191,18 @@ def collect_weekly(
     since = datetime.combine(since_day, time.min, tz)
     hebdos: list[Inspection] = []
     items: dict[str, list[dict]] = defaultdict(list)
-    if settings.hebdo_template_ids:
-        for raw in mitti.feed_inspections(settings.hebdo_template_ids, since):
+    if h_ids:
+        for raw in mitti.feed_inspections(h_ids, since):
             insp = to_inspection(raw)
             if insp is None:
                 no_site += 1
             elif since_day <= insp.day <= sunday:
                 hebdos.append(insp)
-        for item in mitti.feed_inspection_items(settings.hebdo_template_ids, since):
+        for item in mitti.feed_inspection_items(h_ids, since):
             if is_elec(item.get("label") or "", settings.elec_prefix):
                 items[item.get("audit_id") or ""].append(item)
     else:
-        warnings.append("SAFETYSYNC_HEBDO_TEMPLATE_IDS non renseigné : hebdos ignorés.")
+        warnings.append("Aucune trame hebdo trouvée (SAFETYSYNC_HEBDO_TEMPLATES).")
     if no_site:
         warnings.append(f"{no_site} inspection(s) sans site Mitti : non comptées.")
 
@@ -289,7 +281,7 @@ def collect_weekly(
         old_limit = days[-1] - timedelta(days=settings.old_action_days)
         for parc in parcs:
             pannes_before = sum(1 for g in before.get(parc, {}).values() if g.state == PANNE)
-            if settings.journalier_template_ids:
+            if j_ids:
                 cells = []
                 for d in days:
                     issues = 0
@@ -306,9 +298,7 @@ def collect_weekly(
                 view.day_cells[parc] = cells
             else:
                 view.day_cells[parc] = [NOT_CONFIGURED] * 7
-            view.hebdo[parc] = (
-                hebdo_cell(by_site_h[parc], th_h) if settings.hebdo_template_ids else NOT_CONFIGURED
-            )
+            view.hebdo[parc] = hebdo_cell(by_site_h[parc], th_h) if h_ids else NOT_CONFIGURED
             base = created[week_monday].get(parc) or ActionStats()
             s = ActionStats(base.creees, base.transferees, base.rejetees)
             for ln in lines.get(parc, []):
@@ -339,35 +329,28 @@ def collect_weekly(
     )
     report.kpis = build_kpis(current.counts(parcs), previous.counts(parcs), len(parcs))
     for parc in parcs:
+        journ = [c.score for c in current.day_cells[parc] if c.score is not None]
         report.priorities.append(
             priority(
                 parc,
-                current.day_cells[parc],
-                current.hebdo[parc],
-                current.games.get(parc, {}),
                 current.stats[parc],
+                sum(journ) / len(journ) if journ else None,
+                current.hebdo[parc].score,
             )
         )
     report.priorities.sort(key=lambda p: (-p.score, p.site))
 
-    # --- Taux de panne par machine (trimestre précédent / en cours)
+    # --- Taux de panne par parc et par machine (trimestre précédent / en cours)
     q_cur = quarter_start(sunday)
-    prev_rates = breakdown_rates(
+    report.breakdowns_prev = breakdown_counts(
         items, hebdos, settings.elec_prefix, q_prev, q_cur - timedelta(days=1)
     )
-    cur_rates = breakdown_rates(items, hebdos, settings.elec_prefix, q_cur, sunday)
+    report.breakdowns_cur = breakdown_counts(items, hebdos, settings.elec_prefix, q_cur, sunday)
     report.quarters = (quarter_label(q_prev), quarter_label(q_cur))
-    for name in sorted(set(prev_rates) | set(cur_rates)):
-        machine = MachineRate(name, prev_rates.get(name, (0, 0)), cur_rates.get(name, (0, 0)))
-        for parc in parcs:
-            state = current.games.get(parc, {}).get(name)
-            if state and state.state == PANNE:
-                machine.down_now.append((parc, state.weeks_down))
-            elif state and state.state == MAINTENANCE:
-                machine.maint_now.append(parc)
-        machine.down_now.sort(key=lambda x: (-x[1], x[0]))
-        report.machines.append(machine)
-    report.machines.sort(key=lambda m: (-(MachineRate.rate(m.cur) or 0), m.name))
+    names = {g for _, g in report.breakdowns_prev} | {g for _, g in report.breakdowns_cur}
+    for states in current.games.values():
+        names |= set(states)
+    report.machines = sorted(names)
 
     logger.info(
         "Rapport : %s parc(s), %s journalier(s) sur 2 semaines, %s hebdo(s), jours ouverts %s",
@@ -396,7 +379,15 @@ def build_kpis(cur: dict, prev: dict, nb_parcs: int) -> list[Kpi]:
             f"{cur['done']}/{cur['expected']} attendus",
         ),
         Kpi("Hebdos faits", f"{cur['hebdos']}/{nb_parcs}", cur["hebdos"], prev["hebdos"], "up"),
-        Kpi("Contrôles suspects", str(cur["suspects"]), cur["suspects"], prev["suspects"], "down"),
+        Kpi(
+            "Contrôles incohérents",
+            str(cur["incoherents"]),
+            cur["incoherents"],
+            prev["incoherents"],
+            "down",
+            "",
+            f"{cur['incomplets']} non clôturés",
+        ),
         Kpi("Jeux en panne", str(cur["pannes"]), cur["pannes"], prev["pannes"], "down"),
         Kpi(
             "Actions créées",
@@ -419,6 +410,12 @@ def build_kpis(cur: dict, prev: dict, nb_parcs: int) -> list[Kpi]:
         Kpi("Stock à traiter", str(cur["a_traiter"]), cur["a_traiter"], prev["a_traiter"], "down"),
         Kpi("Actions traitées", str(cur["traitees"]), cur["traitees"], prev["traitees"], "up"),
     ]
+
+
+def _templates(mitti: MittiAPI, spec: str, kind: str, warnings: list[str]) -> list[str]:
+    found = mitti.resolve_templates(spec)
+    logger.info("Trames %s : %s", kind, ", ".join(f"{n} ({i})" for i, n in found) or "aucune")
+    return [i for i, _ in found]
 
 
 def _thresholds(inspections: list[Inspection], minimum: int, s: ReportSettings) -> Thresholds:

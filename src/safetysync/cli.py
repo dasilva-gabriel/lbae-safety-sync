@@ -162,9 +162,17 @@ def diagnostic() -> int:
         templates: Counter = Counter()
         for raw in mitti.feed_inspections([], since):
             templates[(raw.get("template_id"), raw.get("template_name"))] += 1
-        print("\nTrames utilisées ces 14 derniers jours (pour SAFETYSYNC_*_TEMPLATE_IDS) :")
+        print("\nTrames utilisées ces 14 derniers jours :")
         for (tid, name), n in templates.most_common():
             print(f"  {n:5d}  {name}  ->  {tid}")
+        for label, spec in (
+            ("Journalier", report_settings.journalier_templates),
+            ("Hebdo", report_settings.hebdo_templates),
+        ):
+            found = mitti.resolve_templates(spec)
+            print(f"\nTrames retenues « {label} » (réglage : {spec}) : {len(found)}")
+            for tid, name in found:
+                print(f"  {name}  ->  {tid}")
 
         sheets = SheetCache(ss, settings)
         site_names = set(ref.site_names.values())

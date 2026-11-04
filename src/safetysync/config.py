@@ -109,8 +109,10 @@ class ReportSettings(BaseSettings):
     alert_to: list[str] = []
     alert_cc: list[str] = []
     # IDs des trames Mitti (voir `safety-sync diagnostic`).
-    journalier_template_ids: list[str] = []
-    hebdo_template_ids: list[str] = []
+    # Trames Mitti : mots-clés (le nom de la trame les contient, sans tenir compte de la
+    # casse ; versions archivées comprises) et/ou IDs « template_… », séparés par des virgules.
+    journalier_templates: str = "Journalier"
+    hebdo_templates: str = "Hebdo"
     # Régions lues dans Mitti : niveau de l'arbre des sites qui définit une région.
     region_level: str = "region"
     # Sites Mitti à ne pas faire apparaître dans le rapport (ex. sites de test, parcs fermés).
