@@ -40,16 +40,18 @@ class SmartsheetSettings(BaseSettings):
     max_retries: int = 4
 
 
-class BrevoSettings(BaseSettings):
-    """Envoi des emails (API transactionnelle Brevo, comme Sherlock)."""
+class SmtpSettings(BaseSettings):
+    """Envoi des emails par SMTP (relais Brevo : smtp-relay.brevo.com:587, STARTTLS)."""
 
-    model_config = SettingsConfigDict(env_prefix="BREVO_", **_ENV)
+    model_config = SettingsConfigDict(env_prefix="", **_ENV)
 
-    api_key: SecretStr
-    api_url: str = "https://api.brevo.com/v3"
-    sender_email: str
-    sender_name: str = "Safety-Sync"
-    timeout_seconds: float = 30.0
+    smtp_host: str = "smtp-relay.brevo.com"
+    smtp_port: int = 587
+    smtp_user: str
+    smtp_password: SecretStr
+    email_from: str
+    email_from_name: str = "Safety-Sync"
+    smtp_timeout_seconds: float = 30.0
 
 
 class SyncSettings(BaseSettings):
@@ -142,8 +144,8 @@ def get_smartsheet_settings() -> SmartsheetSettings:
 
 
 @lru_cache
-def get_brevo_settings() -> BrevoSettings:
-    return BrevoSettings()  # type: ignore[call-arg]
+def get_smtp_settings() -> SmtpSettings:
+    return SmtpSettings()  # type: ignore[call-arg]
 
 
 @lru_cache

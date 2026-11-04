@@ -2,7 +2,7 @@
 
 Safety-Sync transfère les actions Mitti (ex-SafetyCulture) vers les feuilles Smartsheet
 « Travaux … (GP-XXX) », synchronise les actions terminées et envoie le rapport
-hebdomadaire de maintenance par email (Brevo). Voir `README.md`.
+hebdomadaire de maintenance par email (SMTP Brevo). Voir `README.md`.
 
 - **Règles** : `docs/fonctionnement.md` (`SYNC-xx` synchronisation, `RAP-xx` rapport).
   Toute nouvelle règle communiquée par l'utilisateur doit y être ajoutée.

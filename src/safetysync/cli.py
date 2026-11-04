@@ -22,13 +22,14 @@ from html import escape
 
 from safetysync.completion import run_completion
 from safetysync.config import (
-    get_brevo_settings,
     get_mitti_settings,
     get_report_settings,
     get_smartsheet_settings,
+    get_smtp_settings,
     get_sync_settings,
 )
 from safetysync.logs import setup_logging
+from safetysync.mailer import SmtpMailer
 from safetysync.mitti import MittiAPI
 from safetysync.smartsheet import SmartsheetAPI
 from safetysync.transfer import SheetCache, run_transfer
@@ -109,7 +110,6 @@ def sync(command: str, dry_run: bool) -> list[str]:
 
 
 def rapport(day: date | None, dry_run: bool) -> list[str]:
-    from safetysync.brevo import BrevoMailer
     from safetysync.report.collect import collect_weekly, previous_monday
     from safetysync.report.render import render, subject
 
@@ -129,7 +129,7 @@ def rapport(day: date | None, dry_run: bool) -> list[str]:
         if not dry_run:
             return [f"SAFETYSYNC_REPORT_TO est vide : rapport non envoyé (HTML écrit dans {path})."]
         return []
-    BrevoMailer(get_brevo_settings()).send(
+    SmtpMailer(get_smtp_settings()).send(
         settings.report_to, subject(report), html, cc=settings.report_cc
     )
     print(f"Rapport envoyé à {', '.join(settings.report_to)}")
@@ -185,8 +185,6 @@ def _alert(command: str, problems: list[str], details: str, dry_run: bool) -> No
     if dry_run or not settings.alert_to:
         return
     try:
-        from safetysync.brevo import BrevoMailer
-
         items = "".join(f"<li>{escape(p)}</li>" for p in problems[:200])
         html = (
             f"<p>L'exécution de <b>safety-sync {escape(command)}</b> du "
@@ -196,7 +194,7 @@ def _alert(command: str, problems: list[str], details: str, dry_run: bool) -> No
         if details:
             html += f"<pre style='font-size:11px'>{escape(details[-5000:])}</pre>"
         html += "<p>Détails dans les logs du serveur.</p>"
-        BrevoMailer(get_brevo_settings()).send(
+        SmtpMailer(get_smtp_settings()).send(
             settings.alert_to, f"[Safety-Sync] Alerte : {command}", html, cc=settings.alert_cc
         )
     except Exception:

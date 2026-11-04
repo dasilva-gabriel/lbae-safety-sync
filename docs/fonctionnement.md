@@ -36,7 +36,7 @@ Les actions Mitti des 730 derniers jours sont indexées (`SAFETYSYNC_COMPLETION_
 
 ## Rapport hebdomadaire (`safety-sync rapport`, lundi 9h00)
 
-Couvre la semaine précédente (lundi → dimanche). Envoyé via Brevo à `SAFETYSYNC_REPORT_TO`
+Couvre la semaine précédente (lundi → dimanche). Envoyé par SMTP (relais Brevo, variables `SMTP_*` et `EMAIL_FROM`) à `SAFETYSYNC_REPORT_TO`
 (+ `SAFETYSYNC_REPORT_CC`). Régions et parcs : `parcs.toml`.
 
 | Règle | Description |
