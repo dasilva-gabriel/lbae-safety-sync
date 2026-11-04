@@ -232,3 +232,34 @@ def test_collecte_et_rendu(mitti, ss, router, report_settings, sync_settings):
     assert "Région : Carine (Nord) — Carine" in html
     assert "Durée non cohérente (120 sec)" in html
     assert "Flippers" in html and "Parcs prioritaires" in html
+
+
+def test_priorite_plafond_actions():
+    p = priority(
+        "A",
+        [DayCell(VERT, "")] * 7,
+        DayCell(VERT, ""),
+        {},
+        ActionStats(a_traiter=167, anciennes=157),
+    )
+    assert p.score == 8
+
+
+def test_trames_non_configurees(mitti, ss, router, report_settings, sync_settings):
+    report_settings.journalier_template_ids = []
+    report_settings.hebdo_template_ids = []
+    router.get(f"{MITTI}/feed/sites").respond(json={"data": [{"id": "s1", "name": "GP-A"}]})
+    router.post(f"{MITTI}/tasks/v1/actions/list").respond(
+        json={
+            "actions": [
+                {"task": action("t1", "AC-1", "GP-A", STATUS_TODO, "2026-10-20T10:00:00Z")},
+            ]
+        }
+    )
+    router.get(f"{SS}/sheets").respond(json={"data": []})
+    rep = collect_weekly(
+        mitti, SheetCache(ss, sync_settings), report_settings, sync_settings, MONDAY
+    )
+    assert rep.hebdo["GP-A"].text == "Non configuré"
+    assert {c.color for c in rep.day_cells["GP-A"]} == {GRIS}
+    assert "hebdo manquant" not in rep.priorities[0].reasons

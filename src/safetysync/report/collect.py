@@ -17,6 +17,7 @@ from safetysync.mitti import (
 )
 from safetysync.parcs import Referentiel, load_referentiel
 from safetysync.report.analysis import (
+    NOT_CONFIGURED,
     ActionStats,
     DayCell,
     GameState,
@@ -201,11 +202,16 @@ def collect_weekly(
     report.game_names = list(names)
 
     for parc in parcs:
-        report.day_cells[parc] = [
-            day_cell(by_site_day[(parc, d)], d in open_days, settings.min_duration_seconds)
-            for d in days
-        ]
-        report.hebdo[parc] = hebdo_cell(week_hebdos[parc])
+        if settings.journalier_template_ids:
+            report.day_cells[parc] = [
+                day_cell(by_site_day[(parc, d)], d in open_days, settings.min_duration_seconds)
+                for d in days
+            ]
+        else:
+            report.day_cells[parc] = [NOT_CONFIGURED] * len(days)
+        report.hebdo[parc] = (
+            hebdo_cell(week_hebdos[parc]) if settings.hebdo_template_ids else NOT_CONFIGURED
+        )
         report.stats[parc] = stats.get(parc, ActionStats())
         report.priorities.append(
             priority(

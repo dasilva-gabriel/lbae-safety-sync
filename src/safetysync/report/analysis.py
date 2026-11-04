@@ -17,6 +17,10 @@ VERT, JAUNE, ROUGE, BLEU, GRIS = "vert", "jaune", "rouge", "bleu", "gris"
 # États des jeux électroniques
 OK, MAINTENANCE, PANNE, INCONNU = "ok", "maintenance", "panne", "inconnu"
 
+# Plafond de la part « actions à traiter » dans le score de priorité (RAP-08) : un gros
+# stock historique ne doit pas masquer les pannes et les inspections manquées.
+ACTIONS_CAP = 8.0
+
 
 @dataclass
 class Inspection:
@@ -106,6 +110,9 @@ def day_cell(inspections: list[Inspection], is_open: bool, min_duration: int) ->
             BLEU, text, [f"Anticipée (faite le {early[-1].started_day:%d/%m})"], last.link
         )
     return DayCell(VERT, text, [], last.link)
+
+
+NOT_CONFIGURED = DayCell(GRIS, "Non configuré")
 
 
 def hebdo_cell(inspections: list[Inspection]) -> DayCell:
@@ -262,7 +269,7 @@ def priority(
         score += doubtful
         reasons.append(f"{doubtful} journalier(s) douteux")
     if stats.a_traiter:
-        score += 0.5 * stats.a_traiter + 0.5 * stats.anciennes
+        score += min(0.5 * stats.a_traiter + 0.5 * stats.anciennes, ACTIONS_CAP)
         txt = f"{stats.a_traiter} action(s) à traiter"
         if stats.anciennes:
             txt += f" dont {stats.anciennes} ancienne(s)"
