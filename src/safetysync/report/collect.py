@@ -74,10 +74,19 @@ class WeekView:
     stats: dict[str, ActionStats] = field(default_factory=dict)
     games: dict[str, dict[str, GameState]] = field(default_factory=dict)
     journalier_median: int | None = None
+    synthesis: dict[str, str] = field(default_factory=dict)  # synthèse du dernier hebdo
 
     @property
     def sunday(self) -> date:
         return self.days[-1]
+
+    def note_journaliers(self, parc: str) -> float | None:
+        """Note moyenne des journaliers clôturés de la semaine (RAP-11)."""
+        scores = [c.score for c in self.day_cells.get(parc, []) if c.score is not None]
+        return sum(scores) / len(scores) if scores else None
+
+    def note_hebdo(self, parc: str) -> float | None:
+        return self.hebdo.get(parc, NOT_CONFIGURED).score
 
     def counts(self, parcs: list[str]) -> dict:
         expected = done = incoherents = incomplets = 0
@@ -191,6 +200,7 @@ def collect_weekly(
     since = datetime.combine(since_day, time.min, tz)
     hebdos: list[Inspection] = []
     items: dict[str, list[dict]] = defaultdict(list)
+    synthesis: dict[str, str] = {}
     if h_ids:
         for raw in mitti.feed_inspections(h_ids, since):
             insp = to_inspection(raw)
@@ -198,9 +208,15 @@ def collect_weekly(
                 no_site += 1
             elif since_day <= insp.day <= sunday:
                 hebdos.append(insp)
+        synthesis_label = settings.synthesis_label.strip().lower()
         for item in mitti.feed_inspection_items(h_ids, since):
-            if is_elec(item.get("label") or "", settings.elec_prefix):
+            label = item.get("label") or ""
+            if is_elec(label, settings.elec_prefix):
                 items[item.get("audit_id") or ""].append(item)
+            elif synthesis_label and label.strip().lower().startswith(synthesis_label):
+                text = str(item.get("response") or "").strip()
+                if text:
+                    synthesis[item.get("audit_id") or ""] = text
     else:
         warnings.append("Aucune trame hebdo trouvée (SAFETYSYNC_HEBDO_TEMPLATES).")
     if no_site:
@@ -254,6 +270,19 @@ def collect_weekly(
     referentiel = referentiel.with_unknown(seen - excluded)
     parcs = referentiel.parcs
 
+    # Notes des journaliers clôturés, par parc et par jour (écart avec le précédent, RAP-03)
+    closed_scores: dict[str, dict[date, float]] = defaultdict(dict)
+    for insp in journaliers:
+        if insp.completed and insp.score is not None:
+            closed_scores[insp.site].setdefault(insp.day, insp.score)
+
+    def previous_score(parc: str, day: date):
+        for back in range(1, 4):
+            d = day - timedelta(days=back)
+            if d in closed_scores.get(parc, {}):
+                return closed_scores[parc][d], d
+        return None
+
     def build(week_monday: date) -> WeekView:
         days = week_days(week_monday)
         week_j = [i for i in journaliers if days[0] <= i.day <= days[-1]]
@@ -294,11 +323,25 @@ def collect_weekly(
                             and recent <= ln.reported < d
                             and ln.open_on(d - timedelta(days=1))
                         )
-                    cells.append(day_cell(by_day[(parc, d)], d in view.open_days, th_j, issues))
+                    cells.append(
+                        day_cell(
+                            by_day[(parc, d)],
+                            d in view.open_days,
+                            th_j,
+                            issues,
+                            previous_score(parc, d),
+                        )
+                    )
                 view.day_cells[parc] = cells
             else:
                 view.day_cells[parc] = [NOT_CONFIGURED] * 7
             view.hebdo[parc] = hebdo_cell(by_site_h[parc], th_h) if h_ids else NOT_CONFIGURED
+            closed_h = sorted(
+                (i for i in by_site_h[parc] if i.completed and i.id in synthesis),
+                key=lambda i: i.day,
+            )
+            if closed_h:
+                view.synthesis[parc] = synthesis[closed_h[-1].id]
             base = created[week_monday].get(parc) or ActionStats()
             s = ActionStats(base.creees, base.transferees, base.rejetees)
             for ln in lines.get(parc, []):
@@ -329,13 +372,12 @@ def collect_weekly(
     )
     report.kpis = build_kpis(current.counts(parcs), previous.counts(parcs), len(parcs))
     for parc in parcs:
-        journ = [c.score for c in current.day_cells[parc] if c.score is not None]
         report.priorities.append(
             priority(
                 parc,
                 current.stats[parc],
-                sum(journ) / len(journ) if journ else None,
-                current.hebdo[parc].score,
+                current.note_journaliers(parc),
+                current.note_hebdo(parc),
             )
         )
     report.priorities.sort(key=lambda p: (-p.score, p.site))
@@ -420,7 +462,12 @@ def _templates(mitti: MittiAPI, spec: str, kind: str, warnings: list[str]) -> li
 
 def _thresholds(inspections: list[Inspection], minimum: int, s: ReportSettings) -> Thresholds:
     return thresholds(
-        inspections, minimum, s.suspicious_duration_ratio, s.usual_hour_start, s.usual_hour_end
+        inspections,
+        minimum,
+        s.suspicious_duration_ratio,
+        s.usual_hour_start,
+        s.usual_hour_end,
+        s.score_jump_points,
     )
 
 

@@ -3,7 +3,7 @@
 Le data feed /feed/sites (avec `show_only_leaf_nodes=false`) renvoie tous les niveaux
 (location, area, region…) avec `parent_id` et `meta_label`. Un parc est un site
 « feuille » ; sa région est le premier ancêtre dont le niveau vaut `region_level`
-(par défaut « region »), à défaut l'ancêtre direct.
+(par défaut « area », le niveau qui porte le nom du DR dans Mitti), à défaut l'ancêtre direct.
 """
 
 from __future__ import annotations
@@ -45,7 +45,7 @@ class Referentiel:
 
 
 def referentiel_from_sites(
-    nodes: list[dict], *, region_level: str = "region", excluded: list[str] | None = None
+    nodes: list[dict], *, region_level: str = "area", excluded: list[str] | None = None
 ) -> Referentiel:
     excluded_set = {e.strip().upper() for e in excluded or []}
     alive = [n for n in nodes if not n.get("deleted")]

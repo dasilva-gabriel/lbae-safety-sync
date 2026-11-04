@@ -87,6 +87,16 @@ def test_cellules_journalier():
     assert day_cell([insp("A", d, score=100.0)], True, TH).color == VERT
 
 
+def test_ecart_de_note_avec_la_veille():
+    d = MONDAY
+    jump = day_cell([insp("A", d, score=100.0)], True, TH, previous=(73.0, date(2026, 10, 18)))
+    assert jump.color == JAUNE and jump.issues == ["note 100 % (contre 73 % le 18/10)"]
+    down = day_cell([insp("A", d, score=70.0)], True, TH, previous=(95.0, date(2026, 10, 17)))
+    assert down.color == JAUNE
+    calm = day_cell([insp("A", d, score=90.0)], True, TH, previous=(85.0, date(2026, 10, 18)))
+    assert calm.color == VERT
+
+
 def test_cellule_hebdo():
     assert hebdo_cell([]).color == ROUGE
     assert hebdo_cell([insp("A", MONDAY)]).color == VERT
@@ -124,6 +134,10 @@ def test_etat_des_jeux_et_semaines_de_panne():
             {"label": KART, "response": "En Panne", "comment": "Batterie"},
             {"label": HOCKEY, "response": "En Service mais Maintenance"},
             {"label": "Autre question", "response": "En Panne"},
+            {
+                "label": "[Jeu Elec.] Les Flippers sont-ils tous fonctionnels ?",
+                "response": "Non Concerné",
+            },
         ],
         "h4": [{"label": KART, "response": "OK et En Service"}],
     }
@@ -131,6 +145,7 @@ def test_etat_des_jeux_et_semaines_de_panne():
     assert states["A"]["Kartings"] == GameState(PANNE, 2, "Batterie")
     assert states["A"]["Air Hockey"].state == "maintenance"
     assert "Autre question" not in states["A"]
+    assert "Flippers" not in states["A"]  # « Non Concerné » = machine absente
 
 
 def test_taux_de_panne_et_trimestres():
@@ -181,8 +196,9 @@ def test_tendances():
 
 def test_regions_depuis_l_arbre_mitti():
     nodes = [
-        {"id": "r1", "name": "Ouest", "meta_label": "region"},
-        {"id": "r2", "name": "Est", "meta_label": "region"},
+        {"id": "fr", "name": "France", "meta_label": "region"},
+        {"id": "r1", "name": "Ouest", "meta_label": "area", "parent_id": "fr"},
+        {"id": "r2", "name": "Est", "meta_label": "area", "parent_id": "fr"},
         {
             "id": "l1",
             "name": "gp-lma",
@@ -216,8 +232,9 @@ def test_collecte_et_rendu(mitti, ss, router, report_settings, sync_settings):
     router.get(f"{MITTI}/feed/sites", params={"show_only_leaf_nodes": "false"}).respond(
         json={
             "data": [
-                {"id": "r1", "name": "Carine (Nord)", "meta_label": "region"},
-                {"id": "a1", "name": "Hauts-de-France", "meta_label": "area", "parent_id": "r1"},
+                {"id": "fr", "name": "France", "meta_label": "region"},
+                {"id": "r1", "name": "Carine (Nord)", "meta_label": "area", "parent_id": "fr"},
+                {"id": "a1", "name": "Lille", "meta_label": "zone", "parent_id": "r1"},
                 {"id": "s1", "name": "GP-A", "meta_label": "location", "parent_id": "a1"},
                 {"id": "s2", "name": "GP-B", "meta_label": "location", "parent_id": "r1"},
                 {"id": "s3", "name": "GP-C", "meta_label": "location"},
@@ -253,6 +270,11 @@ def test_collecte_et_rendu(mitti, ss, router, report_settings, sync_settings):
                 {"audit_id": "h1", "label": flipper, "response": "En Panne"},
                 {"audit_id": "h0", "label": flipper, "response": "OK et En Service"},
                 {"audit_id": "h1", "label": "Propreté", "response": "Vérifié et OK"},
+                {
+                    "audit_id": "h1",
+                    "label": "Synthèse sur l'état du Parc",
+                    "response": "Urgent : filet",
+                },
             ]
         }
     )
@@ -295,6 +317,8 @@ def test_collecte_et_rendu(mitti, ss, router, report_settings, sync_settings):
     assert b.color == JAUNE and b.issues[0].startswith("trop rapide 2 min")
     assert cur.hebdo["GP-A"].color == VERT and cur.hebdo["GP-B"].color == ROUGE
     assert cur.games["GP-A"]["Flippers"].state == PANNE
+    assert cur.synthesis == {"GP-A": "Urgent : filet"}
+    assert cur.note_journaliers("GP-A") == 95.0 and cur.note_hebdo("GP-B") is None
 
     s = cur.stats["GP-A"]
     assert (s.creees, s.transferees, s.rejetees) == (2, 1, 1)
@@ -330,6 +354,7 @@ def test_collecte_et_rendu(mitti, ss, router, report_settings, sync_settings):
         "T3 2026",
     ):
         assert text in html, text
+    assert "Synthèse hebdo : « Urgent : filet »" in html and "Note<br>journ." in html
     assert "Flipper" in html and "100 %" in html and "(0 %)" in html
     order = [
         html.index(t)

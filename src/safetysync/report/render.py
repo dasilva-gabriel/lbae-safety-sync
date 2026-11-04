@@ -199,13 +199,25 @@ def _top(report: WeeklyReport) -> str:
             f'<span style="font-size:11px;font-weight:normal;color:{MUTED}">'
             f"{escape(region.nom if region else '')}</span></td>"
             f'<td valign="top" style="padding:8px;{cell}font-size:12px;color:{INK};'
-            f'line-height:17px">{escape(" · ".join(p.reasons))}</td>'
+            f'line-height:17px">{escape(" · ".join(p.reasons))}{_synthesis(report, p.site)}</td>'
             f'<td width="48" align="right" valign="top" style="padding:8px 0;{cell}'
             f'font-size:10px;color:{MUTED}">priorité<br>'
             f'<b style="font-size:15px;color:{INK}">{p.score:g}</b>'
             f'<span style="font-size:10px">/100</span></td></tr>'
         )
     return _row(f"<table {TABLE}>{''.join(rows)}</table>")
+
+
+def _synthesis(report: WeeklyReport, parc: str) -> str:
+    text = report.current.synthesis.get(parc, "").strip()
+    if len(text) <= 2:  # « / », « - »… : rien d'utile
+        return ""
+    if len(text) > 160:
+        text = text[:157].rstrip() + "…"
+    return (
+        f'<br><span style="font-size:11px;color:{MUTED};font-style:italic">'
+        f"Synthèse hebdo : « {escape(text)} »</span>"
+    )
 
 
 def _status_cell(cell: DayCell, width: int = 26) -> str:
@@ -227,7 +239,34 @@ def _short(issue: str) -> str:
     """Version courte d'une alerte pour le tableau compact (détail au survol de la case)."""
     issue = re.sub(r"\s*\(méd\. [^)]*\)", "", issue)
     issue = issue.replace("trop rapide ", "").replace("fait à ", "")
+    issue = re.sub(r"^note (\d+ %) \(contre (\d+ %) le ([\d/]+)\)$", r"\2→\1", issue)
     return re.sub(r"pb ouverts?", "pb", issue)
+
+
+def _grade(value: float | None, previous: float | None = None, width: int = 44) -> str:
+    """Note colorée (vert ≥ 90 %, orange ≥ 80 %, rouge sinon) + évolution vs S-1."""
+    if value is None:
+        return (
+            f'<td width="{width}" align="center" style="{FONT}font-size:11px;color:#BBBBBB">-</td>'
+        )
+    color = "#1E8E3E" if value >= 90 else "#D9822B" if value >= 80 else "#C62828"
+    trend = ""
+    if previous is not None and abs(value - previous) >= 1:
+        up = value > previous
+        trend = (
+            f'<br><span style="font-size:9px;font-weight:normal;color:'
+            f'{TONE["good"] if up else TONE["bad"]}">{"▲" if up else "▼"}'
+            f"{abs(value - previous):.0f}</span>"
+        )
+    return (
+        f'<td width="{width}" align="center" style="{FONT}font-size:12px;font-weight:bold;'
+        f'color:{color};line-height:13px">{value:.0f}%{trend}</td>'
+    )
+
+
+def _avg(values) -> float | None:
+    values = [v for v in values if v is not None]
+    return sum(values) / len(values) if values else None
 
 
 def _alerts(cells: list[DayCell], hebdo: DayCell, days) -> str:
@@ -270,17 +309,29 @@ def _inspections(report: WeeklyReport) -> str:
             f'<br><span style="font-weight:normal;font-size:9px">{d:%d}</span></td>'
         )
     head += _spacer() + f'<td width="26" align="center" style="{small}color:{INK}">H</td>'
+    head += _spacer(6) + (
+        f'<td width="44" align="center" style="{FONT}font-size:9px;color:{MUTED};'
+        f'line-height:10px">Note<br>journ.</td>'
+        f'<td width="44" align="center" style="{FONT}font-size:9px;color:{MUTED};'
+        f'line-height:10px">Note<br>hebdo</td>'
+    )
     head += f'<td style="{FONT}font-size:11px;color:{MUTED};padding-left:8px">Alertes</td>'
     rows = [f"<tr>{head}</tr>"]
+    prev = report.previous
     for region in report.referentiel.regions:
         c = view.counts(region.parcs)
         summary = (
-            f"— journaliers {c['done']}/{c['expected']} · hebdos {c['hebdos']}/"
-            f"{len(region.parcs)}"
-            + (f" · {c['incoherents']} incohérent(s)" if c["incoherents"] else "")
-            + (f" · {c['incomplets']} non clôturé(s)" if c["incomplets"] else "")
+            f"— journ. {c['done']}/{c['expected']} · hebdos {c['hebdos']}/{len(region.parcs)}"
+            + (f" · {c['incoherents']} incoh." if c["incoherents"] else "")
+            + (f" · {c['incomplets']} non clôt." if c["incomplets"] else "")
         )
-        rows.append(_region_rows(region.nom, summary, 11))
+        notes_j = _avg(view.note_journaliers(p) for p in region.parcs)
+        notes_h = _avg(view.note_hebdo(p) for p in region.parcs)
+        if notes_j is not None or notes_h is not None:
+            summary += " · notes " + " / ".join(
+                f"{v:.0f} %" if v is not None else "-" for v in (notes_j, notes_h)
+            )
+        rows.append(_region_rows(region.nom, summary, 14))
         for parc in region.parcs:
             cells = view.day_cells[parc]
             hebdo = view.hebdo[parc]
@@ -290,6 +341,9 @@ def _inspections(report: WeeklyReport) -> str:
                 + "".join(_status_cell(c) for c in cells)
                 + _spacer()
                 + _status_cell(hebdo)
+                + _spacer(6)
+                + _grade(view.note_journaliers(parc), prev.note_journaliers(parc))
+                + _grade(view.note_hebdo(parc), prev.note_hebdo(parc))
                 + f'<td style="padding:0 0 0 8px;{FONT}font-size:11px;color:#6B4A00;'
                 f'line-height:14px">{_alerts(cells, hebdo, view.days)}</td></tr>'
             )
@@ -328,6 +382,8 @@ def _legend(report: WeeklyReport) -> str:
         "<b>Incohérent</b> : « 3 min » = trop rapide (sous 40 % de la durée médiane du "
         f"réseau{median_txt}) ; « 02h00 » = heure inhabituelle ; « anticipé » = commencé avant "
         "le jour contrôlé ; « scores x→y » = plusieurs contrôles différents le même jour ; "
+        "« 73 %→100 % » = note qui varie de 20 points ou plus par rapport au journalier "
+        "précédent ; "
         "« 100 % malgré N pb » = tout conforme alors que le parc a des jeux en panne ou des "
         "actions signalées depuis moins de 14 jours. <b>Antidaté</b> : rempli après le jour "
         "contrôlé (« saisi le »). Détail au survol de chaque case."

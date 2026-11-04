@@ -114,7 +114,7 @@ class ReportSettings(BaseSettings):
     journalier_templates: str = "Journalier"
     hebdo_templates: str = "Hebdo"
     # Régions lues dans Mitti : niveau de l'arbre des sites qui définit une région.
-    region_level: str = "region"
+    region_level: str = "area"
     # Sites Mitti à ne pas faire apparaître dans le rapport (ex. sites de test, parcs fermés).
     excluded_sites: list[str] = []
     # Jour considéré comme ouvert si au moins ce ratio de parcs a fait son journalier.
@@ -123,7 +123,11 @@ class ReportSettings(BaseSettings):
     # ratio × durée médiane du réseau sur la semaine).
     min_duration_seconds: int = Field(default=300, ge=0)
     min_hebdo_duration_seconds: int = Field(default=900, ge=0)
-    suspicious_duration_ratio: float = Field(default=0.4, ge=0, le=1)
+    suspicious_duration_ratio: float = Field(default=0.25, ge=0, le=1)
+    # Écart de note (points) avec le journalier précédent (≤ 3 jours avant) jugé incohérent.
+    score_jump_points: float = Field(default=20.0, ge=0)
+    # Question texte de l'hebdo dont la réponse est affichée dans le Top 5.
+    synthesis_label: str = "Synthèse sur l'état du Parc"
     # Heures plausibles de début d'un contrôle (heure locale, [début, fin[).
     usual_hour_start: int = Field(default=6, ge=0, le=23)
     usual_hour_end: int = Field(default=23, ge=1, le=24)

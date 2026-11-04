@@ -91,16 +91,25 @@ class Thresholds:
     median: int | None = None  # durée médiane réseau de la semaine
     hour_start: int = 6
     hour_end: int = 23
+    score_jump: float = 20.0  # écart de note (points) avec le contrôle précédent
 
 
 def thresholds(
-    inspections: list[Inspection], min_seconds: int, ratio: float, hour_start=6, hour_end=23
+    inspections: list[Inspection],
+    min_seconds: int,
+    ratio: float,
+    hour_start=6,
+    hour_end=23,
+    score_jump: float = 20.0,
 ) -> Thresholds:
     """Seuil « trop rapide » = max(minimum absolu, ratio × médiane réseau de la semaine)."""
     durations = [i.duration for i in inspections if i.completed and i.duration]
     median = int(statistics.median(durations)) if durations else None
     limit = max(min_seconds, int(ratio * median) if median else 0)
-    return Thresholds(limit, median, hour_start, hour_end)
+    return Thresholds(limit, median, hour_start, hour_end, score_jump)
+
+
+Previous = tuple[float, date]  # (note, jour) du contrôle clôturé précédent du même parc
 
 
 def week_days(monday: date) -> list[date]:
@@ -119,7 +128,9 @@ def opening_days(
     return {d for d in days if done[d] and len(done[d] & reference) / total >= ratio}
 
 
-def _incoherences(completed: list[Inspection], th: Thresholds, open_issues: int) -> list[str]:
+def _incoherences(
+    completed: list[Inspection], th: Thresholds, open_issues: int, previous: Previous | None
+) -> list[str]:
     issues: list[str] = []
     durations = [i.duration for i in completed if i.duration is not None]
     if durations and max(durations) < th.min_duration:
@@ -139,16 +150,25 @@ def _incoherences(completed: list[Inspection], th: Thresholds, open_issues: int)
     last = completed[-1]
     if open_issues and last.score is not None and last.score >= 99.95:
         issues.append(f"100 % malgré {open_issues} pb ouvert{'s' if open_issues > 1 else ''}")
+    if previous and last.score is not None and abs(last.score - previous[0]) >= th.score_jump:
+        issues.append(
+            f"note {last.score:.0f} % (contre {previous[0]:.0f} % le {previous[1]:%d/%m})"
+        )
     return issues
 
 
-def _closed_cell(completed: list[Inspection], th: Thresholds | None, open_issues: int) -> DayCell:
+def _closed_cell(
+    completed: list[Inspection],
+    th: Thresholds | None,
+    open_issues: int,
+    previous: Previous | None = None,
+) -> DayCell:
     """Contrôle clôturé : antidaté (bleu) > incohérent (jaune) > cohérent (vert)."""
     last = completed[-1]
     text = pct(last.score) if last.score is not None else "Fait"
     scores = [i.score for i in completed if i.score is not None]
     score = sum(scores) / len(scores) if scores else None
-    issues = _incoherences(completed, th, open_issues) if th else []
+    issues = _incoherences(completed, th, open_issues, previous) if th else []
     late = [i for i in completed if i.started_day and i.started_day > i.day]
     if late:
         issues = [f"saisi le {late[-1].started_day:%d/%m}"] + issues
@@ -157,7 +177,11 @@ def _closed_cell(completed: list[Inspection], th: Thresholds | None, open_issues
 
 
 def day_cell(
-    inspections: list[Inspection], is_open: bool, th: Thresholds, open_issues: int = 0
+    inspections: list[Inspection],
+    is_open: bool,
+    th: Thresholds,
+    open_issues: int = 0,
+    previous: Previous | None = None,
 ) -> DayCell:
     """RAP-03 : état d'une cellule (parc × jour)."""
     if not inspections:
@@ -165,7 +189,7 @@ def day_cell(
     completed = [i for i in inspections if i.completed]
     if not completed:
         return DayCell(ORANGE, "Non clôturé", ["non clôturé"], inspections[-1].link)
-    return _closed_cell(completed, th, open_issues)
+    return _closed_cell(completed, th, open_issues, previous)
 
 
 def hebdo_cell(inspections: list[Inspection], th: Thresholds | None = None) -> DayCell:
@@ -223,11 +247,10 @@ def _elec_answers(items: list[dict], prefix: str) -> dict[str, tuple[str, str]]:
     states = {}
     for item in items:
         label = item.get("label") or ""
-        if is_elec(label, prefix):
-            states[game_name(label, prefix)] = (
-                response_state(item.get("response") or ""),
-                (item.get("comment") or "").strip(),
-            )
+        state = response_state(item.get("response") or "")
+        # « Non Concerné » (ou vide) : le parc n'a pas cette machine
+        if is_elec(label, prefix) and state != INCONNU:
+            states[game_name(label, prefix)] = (state, (item.get("comment") or "").strip())
     return states
 
 
