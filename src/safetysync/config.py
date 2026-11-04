@@ -117,14 +117,25 @@ class ReportSettings(BaseSettings):
     excluded_sites: list[str] = []
     # Jour considéré comme ouvert si au moins ce ratio de parcs a fait son journalier.
     opening_ratio: float = Field(default=0.2, ge=0, le=1)
-    # Durée minimale crédible d'un contrôle journalier (secondes).
+    # Contrôles suspects (RAP-03) : « trop rapide » sous max(minimum absolu,
+    # ratio × durée médiane du réseau sur la semaine).
     min_duration_seconds: int = Field(default=300, ge=0)
+    min_hebdo_duration_seconds: int = Field(default=900, ge=0)
+    suspicious_duration_ratio: float = Field(default=0.4, ge=0, le=1)
+    # Heures plausibles de début d'un contrôle (heure locale, [début, fin[).
+    usual_hour_start: int = Field(default=6, ge=0, le=23)
+    usual_hour_end: int = Field(default=23, ge=1, le=24)
+    # « 100 % malgré des problèmes ouverts » : actions signalées depuis N jours et non
+    # terminées, ou jeux en panne au dernier hebdo.
+    perfect_score_check: bool = True
+    recent_issue_days: int = Field(default=14, ge=1)
     # Questions « jeux électroniques » de l'hebdo : préfixe du libellé.
     elec_prefix: str = "[Jeu Elec.]"
-    # Historique des hebdos lu pour calculer depuis quand un jeu est en panne.
+    # Historique minimal des hebdos lu pour calculer depuis quand un jeu est en panne
+    # (le trimestre précédent est toujours lu pour les taux de panne).
     elec_history_weeks: int = Field(default=8, ge=1)
     # Nombre de parcs affichés dans « Parcs prioritaires ».
-    priority_top: int = Field(default=10, ge=1)
+    priority_top: int = Field(default=5, ge=1)
     # Action « à traiter » considérée comme ancienne au-delà de ce nombre de jours.
     old_action_days: int = Field(default=30, ge=1)
     # Dossier où `rapport --dry-run` écrit le HTML.

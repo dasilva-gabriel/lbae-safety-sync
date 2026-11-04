@@ -13,6 +13,7 @@ En cas d'erreur (hors --dry-run), une alerte est envoyée à SAFETYSYNC_ALERT_TO
 from __future__ import annotations
 
 import argparse
+import base64
 import logging
 import sys
 import traceback
@@ -112,7 +113,7 @@ def sync(command: str, dry_run: bool) -> list[str]:
 
 def rapport(day: date | None, dry_run: bool) -> list[str]:
     from safetysync.report.collect import collect_weekly, previous_monday
-    from safetysync.report.render import render, subject
+    from safetysync.report.render import logo_bytes, render, subject
 
     settings = get_report_settings()
     today = datetime.now(settings.tz).date()
@@ -121,17 +122,22 @@ def rapport(day: date | None, dry_run: bool) -> list[str]:
     with mitti, ss:
         sheets = SheetCache(ss, get_sync_settings())
         report = collect_weekly(mitti, sheets, settings, get_sync_settings(), monday)
-    html = render(report)
     if dry_run or not settings.report_to:
+        # Fichier autonome : logo en data URI pour l'aperçu dans un navigateur.
+        logo = "data:image/png;base64," + base64.b64encode(logo_bytes()).decode()
         settings.output_dir.mkdir(parents=True, exist_ok=True)
         path = settings.output_dir / f"rapport-{monday.isoformat()}.html"
-        path.write_text(html, encoding="utf-8")
+        path.write_text(render(report, logo_src=logo), encoding="utf-8")
         print(f"Rapport écrit : {path}")
         if not dry_run:
             return [f"SAFETYSYNC_REPORT_TO est vide : rapport non envoyé (HTML écrit dans {path})."]
         return []
     SmtpMailer(get_smtp_settings()).send(
-        settings.report_to, subject(report), html, cc=settings.report_cc
+        settings.report_to,
+        subject(report),
+        render(report),
+        cc=settings.report_cc,
+        images={"logo": logo_bytes()},
     )
     print(f"Rapport envoyé à {', '.join(settings.report_to)}")
     return []
