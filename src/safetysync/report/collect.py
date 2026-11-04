@@ -7,7 +7,7 @@ hebdos du trimestre précédent et du trimestre en cours (taux de panne des jeux
 from __future__ import annotations
 
 import logging
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 
@@ -181,6 +181,9 @@ def collect_weekly(
         site = referentiel.site_names.get(raw.get("site_id") or "", "")
         return Inspection.from_feed(raw, site, tz) if site else None
 
+    # Trame utilisée par parc dans la semaine (pour repérer les anciennes versions)
+    used_templates: dict[str, dict[str, tuple[date, str]]] = {"journalier": {}, "hebdo": {}}
+
     # --- Journaliers (2 semaines)
     journaliers: list[Inspection] = []
     no_site = 0
@@ -191,6 +194,8 @@ def collect_weekly(
                 no_site += 1
             elif prev_monday <= insp.day <= sunday:
                 journaliers.append(insp)
+                if insp.day >= monday:
+                    _note_template(used_templates["journalier"], insp, raw)
     else:
         warnings.append("Aucune trame journalier trouvée (SAFETYSYNC_JOURNALIER_TEMPLATES).")
 
@@ -208,6 +213,8 @@ def collect_weekly(
                 no_site += 1
             elif since_day <= insp.day <= sunday:
                 hebdos.append(insp)
+                if insp.day >= monday:
+                    _note_template(used_templates["hebdo"], insp, raw)
         synthesis_label = settings.synthesis_label.strip().lower()
         for item in mitti.feed_inspection_items(h_ids, since):
             label = item.get("label") or ""
@@ -219,6 +226,8 @@ def collect_weekly(
                     synthesis[item.get("audit_id") or ""] = text
     else:
         warnings.append("Aucune trame hebdo trouvée (SAFETYSYNC_HEBDO_TEMPLATES).")
+    for kind, by_site in used_templates.items():
+        warnings += _template_mismatches(kind, by_site)
     if no_site:
         warnings.append(f"{no_site} inspection(s) sans site Mitti : non comptées.")
 
@@ -458,6 +467,25 @@ def _templates(mitti: MittiAPI, spec: str, kind: str, warnings: list[str]) -> li
     found = mitti.resolve_templates(spec)
     logger.info("Trames %s : %s", kind, ", ".join(f"{n} ({i})" for i, n in found) or "aucune")
     return [i for i, _ in found]
+
+
+def _note_template(by_site: dict, insp: Inspection, raw: dict) -> None:
+    name = raw.get("template_name") or raw.get("template_id") or ""
+    if name and (insp.site not in by_site or by_site[insp.site][0] <= insp.day):
+        by_site[insp.site] = (insp.day, name)
+
+
+def _template_mismatches(kind: str, by_site: dict[str, tuple[date, str]]) -> list[str]:
+    """Parcs dont le dernier contrôle de la semaine utilise une autre trame que la majorité."""
+    names = Counter(name for _, name in by_site.values())
+    if len(names) < 2:
+        return []
+    main = names.most_common(1)[0][0]
+    return [
+        f"Trame {kind} différente : {site} utilise « {name} » (réseau : « {main} »)."
+        for site, (_, name) in sorted(by_site.items())
+        if name != main
+    ]
 
 
 def _thresholds(inspections: list[Inspection], minimum: int, s: ReportSettings) -> Thresholds:

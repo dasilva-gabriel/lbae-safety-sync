@@ -107,13 +107,23 @@ def test_cellule_hebdo():
 
 def test_nom_des_jeux():
     p = "[Jeu Elec.]"
-    assert game_name("[Jeu Elec.] Vérification de tous les Kartings", p) == "Kartings"
-    assert game_name("[Jeu Elec.] Les Air Hockey sont-ils tous fonctionnels ?", p) == "Air Hockey"
-    assert game_name("[Jeu Elec.] Le Kid Challenge est-il fonctionnel ?", p) == "Kid Challenge"
-    assert (
-        game_name("12.0. [Jeu Elec.] La Néo Expérience est-elle fonctionnelle ?", p)
-        == "Néo Expérience"
-    )
+    cas = {
+        "[Jeu Elec.] Vérification de tous les Kartings": "Karting",
+        "[Jeu Elec.] Les Air Hockey sont-ils tous fonctionnels ?": "Air hockey",
+        "[Jeu Elec.] Tous les Air Hockey sont-ils fonctionnels ?": "Air hockey",
+        "[Jeu Elec.] Le Kid Challenge est-il fonctionnel ?": "Kid Challenge",
+        "[Jeu Elec.] Kid Challenge.": "Kid Challenge",
+        "12.0. [Jeu Elec.] La Néo Expérience est-elle fonctionnelle ?": "Néo Expérience",
+        "[Jeu Elec.] Les Machines à Pinces sans peluches sont-elles fonctionnelles": (
+            "Pinces sans peluches"
+        ),
+        "[Jeu Elec.] Toutes les machines à pinces avec peluches": "Pinces avec peluches",
+        '[Jeu Elec.] Les "Zones Tap-Tap" (cibles) sont-elles toutes fonctionnelles ?': "Tap-Tap",
+        "[Jeu Elec.] Toutes les zones de cibles": "Tap-Tap",
+        "[Jeu Elec.] Tous les jeux de basket sont-ils fonctionnels ?": "Jeux de basket",
+    }
+    for label, attendu in cas.items():
+        assert game_name(label, p) == attendu, label
 
 
 KART = "[Jeu Elec.] Vérification de tous les Kartings"
@@ -142,10 +152,10 @@ def test_etat_des_jeux_et_semaines_de_panne():
         "h4": [{"label": KART, "response": "OK et En Service"}],
     }
     states = game_states(items, hebdos, "[Jeu Elec.]", date(2026, 10, 25))
-    assert states["A"]["Kartings"] == GameState(PANNE, 2, "Batterie")
-    assert states["A"]["Air Hockey"].state == "maintenance"
+    assert states["A"]["Karting"] == GameState(PANNE, 2, "Batterie")
+    assert states["A"]["Air hockey"].state == "maintenance"
     assert "Autre question" not in states["A"]
-    assert "Flippers" not in states["A"]  # « Non Concerné » = machine absente
+    assert "Flipper" not in states["A"]  # « Non Concerné » = machine absente
 
 
 def test_taux_de_panne_et_trimestres():
@@ -165,8 +175,8 @@ def test_taux_de_panne_et_trimestres():
         "d": [{"label": KART, "response": "En Panne"}],  # non terminé : ignoré
     }
     counts = breakdown_counts(items, hebdos, "[Jeu Elec.]", date(2026, 7, 1), date(2026, 9, 30))
-    assert counts == {("A", "Kartings"): (1, 1), ("B", "Kartings"): (0, 1)}
-    assert sum_counts(counts, game="Kartings") == (1, 2)
+    assert counts == {("A", "Karting"): (1, 1), ("B", "Karting"): (0, 1)}
+    assert sum_counts(counts, game="Karting") == (1, 2)
     assert sum_counts(counts, site="B") == (0, 1)
 
 
@@ -258,8 +268,10 @@ def test_collecte_et_rendu(mitti, ss, router, report_settings, sync_settings):
     router.get(f"{MITTI}/feed/inspections", params={"template": "template_h"}).respond(
         json={
             "data": [
-                _journalier(9, "s1", "2026-10-21") | {"id": "h1", "duration": 3000},
+                _journalier(9, "s1", "2026-10-21")
+                | {"id": "h1", "duration": 3000, "template_name": "Hebdo [v5]"},
                 _journalier(8, "s1", "2026-08-10") | {"id": "h0", "duration": 3000},
+                _journalier(7, "s3", "2026-10-22") | {"id": "h7", "template_name": "Hebdo [v4]"},
             ]
         }
     )
@@ -316,8 +328,11 @@ def test_collecte_et_rendu(mitti, ss, router, report_settings, sync_settings):
     b = cur.day_cells["GP-B"][0]
     assert b.color == JAUNE and b.issues[0].startswith("trop rapide 2 min")
     assert cur.hebdo["GP-A"].color == VERT and cur.hebdo["GP-B"].color == ROUGE
-    assert cur.games["GP-A"]["Flippers"].state == PANNE
+    assert cur.games["GP-A"]["Flipper"].state == PANNE
     assert cur.synthesis == {"GP-A": "Urgent : filet"}
+    assert rep.warnings == [
+        "Trame hebdo différente : GP-C utilise « Hebdo [v4] » (réseau : « Hebdo [v5] »)."
+    ]
     assert cur.note_journaliers("GP-A") == 95.0 and cur.note_hebdo("GP-B") is None
 
     s = cur.stats["GP-A"]
@@ -334,9 +349,9 @@ def test_collecte_et_rendu(mitti, ss, router, report_settings, sync_settings):
     assert kpis["Taux de rejet"].value == "33 %"
 
     assert rep.quarters == ("T3 2026", "T4 2026")
-    assert rep.machines == ["Flippers"]
-    assert rep.breakdowns_prev == {("GP-A", "Flippers"): (0, 1)}
-    assert rep.breakdowns_cur == {("GP-A", "Flippers"): (1, 1)}
+    assert rep.machines == ["Flipper"]
+    assert rep.breakdowns_prev == {("GP-A", "Flipper"): (0, 1)}
+    assert rep.breakdowns_cur == {("GP-A", "Flipper"): (1, 1)}
     top = rep.priorities[0]
     assert top.site == "GP-A" and top.reasons[0] == "note journaliers 95 %, hebdo 95 %"
 

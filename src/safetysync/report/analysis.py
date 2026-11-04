@@ -223,8 +223,25 @@ def response_state(response: str) -> str:
 
 _GAME_CUTS = re.compile(r"\s+(sont-ils|sont-elles|est-il|est-elle|sont|est)\b.*$", re.IGNORECASE)
 _GAME_PREFIX = re.compile(
-    r"^(\d+(\.\d+)*\.\s*)?(v[ée]rification de (tous )?(les )?|les |le |la |l')", re.IGNORECASE
+    r"^(\d+(\.\d+)*\.\s*)?(v[ée]rification de\s+)?((tous|toutes)\s+)?(les |le |la |l')?",
+    re.IGNORECASE,
 )
+# Nom canonique d'une machine, quelle que soit la formulation de la question (les
+# versions de trames disent « Les Air Hockey… », « Tous les Air Hockey… », etc.).
+# L'ordre compte : « pinces sans peluches » avant « pinces ».
+CANONICAL_GAMES = [
+    (re.compile(r"kart", re.IGNORECASE), "Karting"),
+    (re.compile(r"air\s*-?\s*hockey", re.IGNORECASE), "Air hockey"),
+    (re.compile(r"pince.*sans", re.IGNORECASE), "Pinces sans peluches"),
+    (re.compile(r"pince", re.IGNORECASE), "Pinces avec peluches"),
+    (re.compile(r"marteau", re.IGNORECASE), "Marteau"),
+    (re.compile(r"carrousel|carousel|man[èe]ge", re.IGNORECASE), "Carrousel"),
+    (re.compile(r"baby", re.IGNORECASE), "Baby-foot"),
+    (re.compile(r"flipper", re.IGNORECASE), "Flipper"),
+    (re.compile(r"tap\s*-?\s*tap|cible", re.IGNORECASE), "Tap-Tap"),
+    (re.compile(r"kid\s*challenge", re.IGNORECASE), "Kid Challenge"),
+    (re.compile(r"n[ée]o", re.IGNORECASE), "Néo Expérience"),
+]
 
 
 def is_elec(label: str, prefix: str) -> bool:
@@ -233,13 +250,16 @@ def is_elec(label: str, prefix: str) -> bool:
 
 
 def game_name(label: str, prefix: str) -> str:
-    """« [Jeu Elec.] Les Air Hockey sont-ils tous fonctionnels ? » → « Air Hockey »."""
+    """« [Jeu Elec.] Les Air Hockey sont-ils tous fonctionnels ? » → « Air hockey »."""
     text = (label or "").strip()
     index = text.lower().find(prefix.lower())
     if index >= 0:
         text = text[index + len(prefix) :].strip()
+    for pattern, canonical in CANONICAL_GAMES:
+        if pattern.search(text):
+            return canonical
     text = _GAME_PREFIX.sub("", text)
-    text = _GAME_CUTS.sub("", text).strip(" ?")
+    text = _GAME_CUTS.sub("", text).strip(" ?.!:")
     return text[:1].upper() + text[1:]
 
 

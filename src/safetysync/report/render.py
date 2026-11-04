@@ -490,17 +490,9 @@ def _actions(report: WeeklyReport) -> str:
 
 
 SHORT_GAMES = {
-    "kartings": "Karting",
-    "air hockey": "Air hockey",
-    "machines à pinces avec peluches": "Pinces peluches",
-    "machines à pinces sans peluches": "Pinces sans pel.",
-    "jeux avec marteau": "Marteau",
-    "carrousels": "Carrousel",
-    "babyfoots": "Baby-foot",
-    "flippers": "Flipper",
-    '"zones tap-tap" (cibles)': "Tap-Tap",
-    "kid challenge": "Kid Challenge",
-    "néo expérience": "Néo Exp.",
+    "Pinces avec peluches": "Pinces peluches",
+    "Pinces sans peluches": "Pinces sans pel.",
+    "Néo Expérience": "Néo Exp.",
 }
 GAME_CELL = {
     OK: ("#C9EBCB", "#1E6B2A"),
@@ -510,7 +502,7 @@ GAME_CELL = {
 
 
 def short_game(name: str) -> str:
-    return SHORT_GAMES.get(name.lower(), name if len(name) <= 14 else name[:13] + ".")
+    return SHORT_GAMES.get(name, name if len(name) <= 14 else name[:13] + ".")
 
 
 def _rate_txt(pair: tuple[int, int]) -> str:
